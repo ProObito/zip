@@ -11,7 +11,7 @@ from pymongo import MongoClient
 from config import ADMIN_IDS, MONGO_URI, DB_NAME, SUPPORT_CHAT
 
 # MongoDB Setup
-mongo_client = MongoClient(MONGO_URI)
+mongo_client = MongoClient(DB_URL)
 db = mongo_client[DB_NAME]
 autho_users_collection = db["authorized_users"]
 user_settings_collection = db["user_settings"]
