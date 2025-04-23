@@ -10,6 +10,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
 from pymongo import MongoClient
 from config import Config
+import tqdm.asyncio
 
 # MongoDB Setup
 mongo_client = MongoClient(Config.DB_URL)
@@ -41,11 +42,30 @@ def remove_duplicates(file_list):
                 base_map[base] = file
     return list(base_map.values())
 
-def generate_pdf(image_files, output_path):
-    """Convert images to PDF without compression."""
+def generate_pdf(image_files, output_path, progress_callback=None):
+    """Convert images to PDF without compression, with progress tracking."""
+    total = len(image_files)
     image_iter = (Image.open(f).convert("RGB") for f in image_files)
     first = next(image_iter)
-    first.save(output_path, save_all=True, append_images=image_iter)
+    images = [first]
+    for i, img in enumerate(image_iter, 1):
+        images.append(img)
+        if progress_callback:
+            progress_callback(i, total)
+    first.save(output_path, save_all=True, append_images=images[1:])
+
+# Progress Bar Utility
+async def update_progress_bar(message: Message, current: int, total: int, stage: str):
+    """Update Telegram message with a text-based progress bar."""
+    percentage = int((current / total) * 100)
+    bar_length = 10
+    filled = int(bar_length * current / total)
+    bar = "█" * filled + " " * (bar_length - filled)
+    text = f"<b>{stage}: [{bar}] {percentage}%</b>"
+    try:
+        await message.edit_text(text, parse_mode=ParseMode.HTML)
+    except:
+        pass  # Ignore edit errors (e.g., if message was deleted)
 
 # MongoDB Helper Functions
 async def add_autho_user(user_id: int):
@@ -186,7 +206,7 @@ async def auto_rename_files(client: Client, message: Message):
 
     # Add inline buttons for Zip to PDF and Close
     inline_buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Zip to PDF 📄", callback_data=f"convert_pdf_{message.message_id}")],
+        [InlineKeyboardButton("Zip to PDF 📄", callback_data=f"convert_pdf_{message.id}")],
         [InlineKeyboardButton("Close ❌", callback_data="close")]
     ])
 
@@ -220,7 +240,7 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         return
 
     zip_name = os.path.splitext(document.file_name)[0]
-    await callback_query.message.edit_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
+    progress_message = await callback_query.message.edit_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
 
     # Use temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -228,19 +248,26 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         extract_folder = os.path.join(temp_dir, f"{zip_name}_extracted")
         pdf_path = os.path.join(temp_dir, f"{zip_name}.pdf")
 
-        # Download ZIP file
+        # Download ZIP file with progress
+        async def download_progress(current, total):
+            await update_progress_bar(progress_message, current, total, "Downloading ZIP")
+
         try:
-            await message.reply_to_message.download(zip_path)
+            await message.reply_to_message.download(zip_path, progress=download_progress)
         except Exception as e:
-            await callback_query.message.edit_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
             return
 
-        # Extract ZIP file
+        # Extract ZIP file with progress
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_folder)
+                file_list = zip_ref.namelist()
+                total_files = len(file_list)
+                for i, file in enumerate(file_list, 1):
+                    zip_ref.extract(file, extract_folder)
+                    await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
         except zipfile.BadZipFile:
-            await callback_query.message.edit_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
             return
 
         # Supported image formats
@@ -253,16 +280,17 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         ])
 
         if not image_files:
-            await callback_query.message.edit_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
             return
 
-        # Convert images to PDF without compression
+        # Convert images to PDF with progress
+        async def pdf_progress(current, total):
+            await update_progress_bar(progress_message, current, total, "Converting to PDF")
+
         try:
-            first_image = Image.open(image_files[0]).convert("RGB")
-            image_list = [Image.open(img).convert("RGB") for img in image_files[1:]]
-            first_image.save(pdf_path, save_all=True, append_images=image_list)
+            generate_pdf(image_files, pdf_path, pdf_progress)
         except Exception as e:
-            await callback_query.message.edit_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
             return
 
         # Upload PDF
@@ -274,9 +302,9 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
                 parse_mode=ParseMode.HTML,
                 reply_to_message_id=message_id
             )
-            await callback_query.message.edit_text("<b>✅ PDF generated and sent!</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text("<b>✅ PDF generated and sent!</b>", parse_mode=ParseMode.HTML)
         except Exception as e:
-            await callback_query.message.edit_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
 
 @Client.on_callback_query(filters.regex("close"))
 async def handle_close_callback(client: Client, callback_query):
@@ -323,7 +351,7 @@ async def handle_zip_reply(client: Client, message: Message):
         return
 
     zip_name = os.path.splitext(document.file_name)[0]
-    await message.reply_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
+    progress_message = await message.reply_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
 
     # Use temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -331,19 +359,26 @@ async def handle_zip_reply(client: Client, message: Message):
         extract_folder = os.path.join(temp_dir, f"{zip_name}_extracted")
         pdf_path = os.path.join(temp_dir, f"{zip_name}.pdf")
 
-        # Download ZIP file
+        # Download ZIP file with progress
+        async def download_progress(current, total):
+            await update_progress_bar(progress_message, current, total, "Downloading ZIP")
+
         try:
-            await message.download(zip_path)
+            await message.download(zip_path, progress=download_progress)
         except Exception as e:
-            await message.reply_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
             return
 
-        # Extract ZIP file
+        # Extract ZIP file with progress
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_folder)
+                file_list = zip_ref.namelist()
+                total_files = len(file_list)
+                for i, file in enumerate(file_list, 1):
+                    zip_ref.extract(file, extract_folder)
+                    await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
         except zipfile.BadZipFile:
-            await message.reply_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
             return
 
         # Supported image formats
@@ -356,16 +391,17 @@ async def handle_zip_reply(client: Client, message: Message):
         ])
 
         if not image_files:
-            await message.reply_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
             return
 
-        # Convert images to PDF without compression
+        # Convert images to PDF with progress
+        async def pdf_progress(current, total):
+            await update_progress_bar(progress_message, current, total, "Converting to PDF")
+
         try:
-            first_image = Image.open(image_files[0]).convert("RGB")
-            image_list = [Image.open(img).convert("RGB") for img in image_files[1:]]
-            first_image.save(pdf_path, save_all=True, append_images=image_list)
+            generate_pdf(image_files, pdf_path, pdf_progress)
         except Exception as e:
-            await message.reply_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
             return
 
         # Upload PDF
@@ -375,5 +411,6 @@ async def handle_zip_reply(client: Client, message: Message):
                 caption=f"<b>Here is your PDF: {zip_name}.pdf 📄</b>",
                 parse_mode=ParseMode.HTML
             )
+            await progress_message.edit_text("<b>✅ PDF generated and sent!</b>", parse_mode=ParseMode.HTML)
         except Exception as e:
-            await message.reply_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
