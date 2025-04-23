@@ -10,7 +10,11 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
 from pymongo import MongoClient
 from config import Config
-import tqdm.asyncio
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # MongoDB Setup
 mongo_client = MongoClient(Config.DB_URL)
@@ -68,8 +72,8 @@ async def update_progress_bar(message: Message, current: int, total: int, stage:
     text = f"<b>{stage}: [{bar}] {percentage}%</b>"
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
-    except:
-        pass  # Ignore edit errors (e.g., if message was deleted)
+    except Exception as e:
+        logger.error(f"Failed to update progress bar: {e}")
 
 # MongoDB Helper Functions
 async def add_autho_user(user_id: int):
@@ -224,187 +228,231 @@ async def auto_rename_files(client: Client, message: Message):
 async def handle_convert_pdf_callback(client: Client, callback_query):
     user_id = callback_query.from_user.id
     message_id = int(callback_query.data.split("_")[2])
-    check = await is_autho_user_exist(user_id)
-    if not check:
-        await callback_query.answer("You are not authorized to perform this action.", show_alert=True)
-        return
+    logger.info(f"Callback received: convert_pdf_{message_id} from user {user_id}")
 
-    # Get the original message
-    message = callback_query.message
-    chat_id = message.chat.id
+    try:
+        check = await is_autho_user_exist(user_id)
+        if not check:
+            logger.warning(f"User {user_id} not authorized")
+            await callback_query.answer("You are not authorized to perform this action.", show_alert=True)
+            return
 
-    # Check if the message has a document
-    if not message.reply_to_message or not message.reply_to_message.document:
-        await callback_query.answer("No document found to convert.", show_alert=True)
-        return
+        # Get the original message
+        message = callback_query.message
+        chat_id = message.chat.id
+        logger.info(f"Processing callback for chat {chat_id}, message {message_id}")
 
-    document = message.reply_to_message.document
-    if not document.file_name.endswith(".zip"):
-        await callback_query.answer("Please send a ZIP file for conversion.", show_alert=True)
-        return
+        # Check if the message has a document
+        if not message.reply_to_message or not message.reply_to_message.document:
+            logger.error(f"No document found for message {message_id}")
+            await callback_query.answer("No document found to convert.", show_alert=True)
+            return
 
-    # Prompt for new PDF name
-    await callback_query.message.edit_text(
-        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
-        parse_mode=ParseMode.HTML
-    )
-    # Store context in MongoDB to retrieve later
-    user_settings_collection.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "pending_pdf_conversion": {
-                "message_id": message_id,
-                "chat_id": chat_id,
-                "document": {
-                    "file_id": document.file_id,
-                    "file_name": document.file_name
+        document = message.reply_to_message.document
+        if not document.file_name.endswith(".zip"):
+            logger.error(f"File {document.file_name} is not a ZIP")
+            await callback_query.answer("Please send a ZIP file for conversion.", show_alert=True)
+            return
+
+        # Prompt for new PDF name
+        logger.info(f"Prompting user {user_id} for new PDF name")
+        await callback_query.message.edit_text(
+            "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
+            parse_mode=ParseMode.HTML
+        )
+
+        # Store context in MongoDB to retrieve later
+        user_settings_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "pending_pdf_conversion": {
+                    "message_id": message_id,
+                    "chat_id": chat_id,
+                    "document": {
+                        "file_id": document.file_id,
+                        "file_name": document.file_name
+                    }
                 }
-            }
-        }},
-        upsert=True
-    )
-    await callback_query.answer("Reply with the new PDF name.")
+            }},
+            upsert=True
+        )
+        await callback_query.answer("Reply with the new PDF name.")
+        logger.info(f"Stored conversion context for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in handle_convert_pdf_callback: {e}")
+        await callback_query.message.edit_text(
+            f"<b>❌ Error: {e}</b>",
+            parse_mode=ParseMode.HTML
+        )
+        await callback_query.answer("An error occurred. Please try again.", show_alert=True)
 
 @Client.on_message(filters.private & filters.text & filters.reply)
 async def handle_pdf_name_reply(client: Client, message: Message):
     user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id)
-    if not check:
-        await message.reply_text(
-            f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+    logger.info(f"Received PDF name reply from user {user_id}")
+
+    try:
+        check = await is_autho_user_exist(user_id)
+        if not check:
+            logger.warning(f"User {user_id} not authorized")
+            await message.reply_text(
+                f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Check if the reply is to a message asking for a PDF name
+        if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
+            logger.warning(f"Reply not to PDF name prompt for user {user_id}")
+            return
+
+        # Get the new PDF name
+        new_pdf_name = sanitize_filename(message.text)
+        if not new_pdf_name:
+            logger.error(f"Invalid PDF name provided by user {user_id}")
+            await message.reply_text(
+                "<b>❌ Invalid PDF name. Please provide a valid name without special characters.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Retrieve conversion context from MongoDB
+        user_data = user_settings_collection.find_one({"user_id": user_id})
+        if not user_data or "pending_pdf_conversion" not in user_data:
+            logger.error(f"No pending PDF conversion for user {user_id}")
+            await message.reply_text(
+                "<b>❌ No pending PDF conversion found. Please start over.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        conversion_data = user_data["pending_pdf_conversion"]
+        message_id = conversion_data["message_id"]
+        chat_id = conversion_data["chat_id"]
+        document_file_id = conversion_data["document"]["file_id"]
+        original_file_name = conversion_data["document"]["file_name"]
+
+        # Clear pending conversion from MongoDB
+        user_settings_collection.update_one(
+            {"user_id": user_id},
+            {"$unset": {"pending_pdf_conversion": ""}}
+        )
+        logger.info(f"Cleared conversion context for user {user_id}")
+
+        # Start processing
+        progress_message = await message.reply_text(
+            "<b>📂 Processing your ZIP file...</b>",
             parse_mode=ParseMode.HTML
         )
-        return
+        logger.info(f"Started processing ZIP for user {user_id}, new name: {new_pdf_name}")
 
-    # Check if the reply is to a message asking for a PDF name
-    if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
-        return
+        # Use temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = os.path.join(temp_dir, original_file_name)
+            extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
+            pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
 
-    # Get the new PDF name
-    new_pdf_name = sanitize_filename(message.text)
-    if not new_pdf_name:
+            # Download ZIP file with progress
+            async def download_progress(current, total):
+                await update_progress_bar(progress_message, current, total, "Downloading ZIP")
+
+            try:
+                await client.download_media(
+                    message=message.reply_to_message.reply_to_message,  # Original ZIP message
+                    file_name=zip_path,
+                    progress=download_progress
+                )
+                logger.info(f"Downloaded ZIP for user {user_id}")
+            except Exception as e:
+                logger.error(f"Download error for user {user_id}: {e}")
+                await progress_message.edit_text(
+                    f"<b>❌ Error downloading file: {e}</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+
+            # Extract ZIP file with progress
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    file_list = zip_ref.namelist()
+                    total_files = len(file_list)
+                    for i, file in enumerate(file_list, 1):
+                        zip_ref.extract(file, extract_folder)
+                        await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
+                logger.info(f"Extracted ZIP for user {user_id}")
+            except zipfile.BadZipFile:
+                logger.error(f"Invalid ZIP file for user {user_id}")
+                await progress_message.edit_text(
+                    "<b>❌ Invalid ZIP file.</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+
+            # Supported image formats
+            valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
+
+            # Get image files, sorted naturally
+            image_files = natural_sort([
+                os.path.join(extract_folder, f) for f in os.listdir(extract_folder)
+                if f.lower().endswith(valid_extensions)
+            ])
+
+            if not image_files:
+                logger.error(f"No images found in ZIP for user {user_id}")
+                await progress_message.edit_text(
+                    "<b>❌ No images found in the ZIP.</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+
+            # Convert images to PDF with progress
+            async def pdf_progress(current, total):
+                await update_progress_bar(progress_message, current, total, "Converting to PDF")
+
+            try:
+                generate_pdf(image_files, pdf_path, pdf_progress)
+                logger.info(f"Converted to PDF for user {user_id}")
+            except Exception as e:
+                logger.error(f"PDF conversion error for user {user_id}: {e}")
+                await progress_message.edit_text(
+                    f"<b>❌ Error converting to PDF: {e}</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+
+            # Upload PDF
+            try:
+                await client.send_document(
+                    chat_id=chat_id,
+                    document=pdf_path,
+                    caption=f"<b>Here is your PDF: {new_pdf_name}.pdf 📄</b>",
+                    parse_mode=ParseMode.HTML,
+                    reply_to_message_id=message_id
+                )
+                await progress_message.edit_text(
+                    "<b>✅ PDF generated and sent!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                logger.info(f"Uploaded PDF for user {user_id}")
+            except Exception as e:
+                logger.error(f"Upload error for user {user_id}: {e}")
+                await progress_message.edit_text(
+                    f"<b>❌ Error uploading PDF: {e}</b>",
+                    parse_mode=ParseMode.HTML
+                )
+
+    except Exception as e:
+        logger.error(f"Error in handle_pdf_name_reply for user {user_id}: {e}")
         await message.reply_text(
-            "<b>❌ Invalid PDF name. Please provide a valid name without special characters.</b>",
+            f"<b>❌ Error: {e}</b>",
             parse_mode=ParseMode.HTML
         )
-        return
-
-    # Retrieve conversion context from MongoDB
-    user_data = user_settings_collection.find_one({"user_id": user_id})
-    if not user_data or "pending_pdf_conversion" not in user_data:
-        await message.reply_text(
-            "<b>❌ No pending PDF conversion found. Please start over.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    conversion_data = user_data["pending_pdf_conversion"]
-    message_id = conversion_data["message_id"]
-    chat_id = conversion_data["chat_id"]
-    document_file_id = conversion_data["document"]["file_id"]
-    original_file_name = conversion_data["document"]["file_name"]
-
-    # Clear pending conversion from MongoDB
-    user_settings_collection.update_one(
-        {"user_id": user_id},
-        {"$unset": {"pending_pdf_conversion": ""}}
-    )
-
-    # Start processing
-    progress_message = await message.reply_text(
-        "<b>📂 Processing your ZIP file...</b>",
-        parse_mode=ParseMode.HTML
-    )
-
-    # Use temporary directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        zip_path = os.path.join(temp_dir, original_file_name)
-        extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
-        pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
-
-        # Download ZIP file with progress
-        async def download_progress(current, total):
-            await update_progress_bar(progress_message, current, total, "Downloading ZIP")
-
-        try:
-            await client.download_media(
-                message=message.reply_to_message.reply_to_message,  # Original ZIP message
-                file_name=zip_path,
-                progress=download_progress
-            )
-        except Exception as e:
-            await progress_message.edit_text(
-                f"<b>❌ Error downloading file: {e}</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        # Extract ZIP file with progress
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                file_list = zip_ref.namelist()
-                total_files = len(file_list)
-                for i, file in enumerate(file_list, 1):
-                    zip_ref.extract(file, extract_folder)
-                    await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
-        except zipfile.BadZipFile:
-            await progress_message.edit_text(
-                "<b>❌ Invalid ZIP file.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        # Supported image formats
-        valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
-
-        # Get image files, sorted naturally
-        image_files = natural_sort([
-            os.path.join(extract_folder, f) for f in os.listdir(extract_folder)
-            if f.lower().endswith(valid_extensions)
-        ])
-
-        if not image_files:
-            await progress_message.edit_text(
-                "<b>❌ No images found in the ZIP.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        # Convert images to PDF with progress
-        async def pdf_progress(current, total):
-            await update_progress_bar(progress_message, current, total, "Converting to PDF")
-
-        try:
-            generate_pdf(image_files, pdf_path, pdf_progress)
-        except Exception as e:
-            await progress_message.edit_text(
-                f"<b>❌ Error converting to PDF: {e}</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        # Upload PDF
-        try:
-            await client.send_document(
-                chat_id=chat_id,
-                document=pdf_path,
-                caption=f"<b>Here is your PDF: {new_pdf_name}.pdf 📄</b>",
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=message_id
-            )
-            await progress_message.edit_text(
-                "<b>✅ PDF generated and sent!</b>",
-                parse_mode=ParseMode.HTML
-            )
-        except Exception as e:
-            await progress_message.edit_text(
-                f"<b>❌ Error uploading PDF: {e}</b>",
-                parse_mode=ParseMode.HTML
-            )
 
 @Client.on_callback_query(filters.regex("close"))
 async def handle_close_callback(client: Client, callback_query):
+    logger.info(f"Close callback received from user {callback_query.from_user.id}")
     await callback_query.message.delete()
     await callback_query.answer("Message closed.")
 
