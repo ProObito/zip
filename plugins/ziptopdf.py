@@ -20,7 +20,7 @@ user_settings_collection = db["user_settings"]
 
 # Ensure SUPPORT_CHAT is defined in Config
 if not hasattr(Config, 'SUPPORT_CHAT'):
-    Config.SUPPORT_CHAT = "@i_killed_my_clan"  # Replace with your actual support chat
+    Config.SUPPORT_CHAT = "@YourSupportChat"  # Replace with your actual support chat
 
 # Utility Functions
 def natural_sort(file_list):
@@ -41,6 +41,10 @@ def remove_duplicates(file_list):
             if base not in base_map or not name.endswith("t"):
                 base_map[base] = file
     return list(base_map.values())
+
+def sanitize_filename(name: str) -> str:
+    """Sanitize filename to remove invalid characters."""
+    return re.sub(r'[^\w\-_\. ]', '', name).strip()
 
 def generate_pdf(image_files, output_path, progress_callback=None):
     """Convert images to PDF without compression, with progress tracking."""
@@ -239,23 +243,101 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         await callback_query.answer("Please send a ZIP file for conversion.", show_alert=True)
         return
 
-    zip_name = os.path.splitext(document.file_name)[0]
-    progress_message = await callback_query.message.edit_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
+    # Prompt for new PDF name
+    await callback_query.message.edit_text(
+        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
+        parse_mode=ParseMode.HTML
+    )
+    # Store context in MongoDB to retrieve later
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "pending_pdf_conversion": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "document": {
+                    "file_id": document.file_id,
+                    "file_name": document.file_name
+                }
+            }
+        }},
+        upsert=True
+    )
+    await callback_query.answer("Reply with the new PDF name.")
+
+@Client.on_message(filters.private & filters.text & filters.reply)
+async def handle_pdf_name_reply(client: Client, message: Message):
+    user_id = message.from_user.id
+    check = await is_autho_user_exist(user_id)
+    if not check:
+        await message.reply_text(
+            f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
+            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Check if the reply is to a message asking for a PDF name
+    if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
+        return
+
+    # Get the new PDF name
+    new_pdf_name = sanitize_filename(message.text)
+    if not new_pdf_name:
+        await message.reply_text(
+            "<b>❌ Invalid PDF name. Please provide a valid name without special characters.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Retrieve conversion context from MongoDB
+    user_data = user_settings_collection.find_one({"user_id": user_id})
+    if not user_data or "pending_pdf_conversion" not in user_data:
+        await message.reply_text(
+            "<b>❌ No pending PDF conversion found. Please start over.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    conversion_data = user_data["pending_pdf_conversion"]
+    message_id = conversion_data["message_id"]
+    chat_id = conversion_data["chat_id"]
+    document_file_id = conversion_data["document"]["file_id"]
+    original_file_name = conversion_data["document"]["file_name"]
+
+    # Clear pending conversion from MongoDB
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$unset": {"pending_pdf_conversion": ""}}
+    )
+
+    # Start processing
+    progress_message = await message.reply_text(
+        "<b>📂 Processing your ZIP file...</b>",
+        parse_mode=ParseMode.HTML
+    )
 
     # Use temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
-        zip_path = os.path.join(temp_dir, document.file_name)
-        extract_folder = os.path.join(temp_dir, f"{zip_name}_extracted")
-        pdf_path = os.path.join(temp_dir, f"{zip_name}.pdf")
+        zip_path = os.path.join(temp_dir, original_file_name)
+        extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
+        pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
 
         # Download ZIP file with progress
         async def download_progress(current, total):
             await update_progress_bar(progress_message, current, total, "Downloading ZIP")
 
         try:
-            await message.reply_to_message.download(zip_path, progress=download_progress)
+            await client.download_media(
+                message=message.reply_to_message.reply_to_message,  # Original ZIP message
+                file_name=zip_path,
+                progress=download_progress
+            )
         except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                f"<b>❌ Error downloading file: {e}</b>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         # Extract ZIP file with progress
@@ -267,7 +349,10 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
                     zip_ref.extract(file, extract_folder)
                     await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
         except zipfile.BadZipFile:
-            await progress_message.edit_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                "<b>❌ Invalid ZIP file.</b>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         # Supported image formats
@@ -280,7 +365,10 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         ])
 
         if not image_files:
-            await progress_message.edit_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                "<b>❌ No images found in the ZIP.</b>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         # Convert images to PDF with progress
@@ -290,7 +378,10 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
         try:
             generate_pdf(image_files, pdf_path, pdf_progress)
         except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                f"<b>❌ Error converting to PDF: {e}</b>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         # Upload PDF
@@ -298,13 +389,19 @@ async def handle_convert_pdf_callback(client: Client, callback_query):
             await client.send_document(
                 chat_id=chat_id,
                 document=pdf_path,
-                caption=f"<b>Here is your PDF: {zip_name}.pdf 📄</b>",
+                caption=f"<b>Here is your PDF: {new_pdf_name}.pdf 📄</b>",
                 parse_mode=ParseMode.HTML,
                 reply_to_message_id=message_id
             )
-            await progress_message.edit_text("<b>✅ PDF generated and sent!</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                "<b>✅ PDF generated and sent!</b>",
+                parse_mode=ParseMode.HTML
+            )
         except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
+            await progress_message.edit_text(
+                f"<b>❌ Error uploading PDF: {e}</b>",
+                parse_mode=ParseMode.HTML
+            )
 
 @Client.on_callback_query(filters.regex("close"))
 async def handle_close_callback(client: Client, callback_query):
@@ -350,67 +447,14 @@ async def handle_zip_reply(client: Client, message: Message):
         await message.reply_text("<b>❌ Please send a valid ZIP file.</b>", parse_mode=ParseMode.HTML)
         return
 
-    zip_name = os.path.splitext(document.file_name)[0]
-    progress_message = await message.reply_text("<b>📂 Processing your ZIP file...</b>", parse_mode=ParseMode.HTML)
+    # Add inline buttons for Zip to PDF and Close
+    inline_buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Zip to PDF 📄", callback_data=f"convert_pdf_{message.id}")],
+        [InlineKeyboardButton("Close ❌", callback_data="close")]
+    ])
 
-    # Use temporary directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        zip_path = os.path.join(temp_dir, document.file_name)
-        extract_folder = os.path.join(temp_dir, f"{zip_name}_extracted")
-        pdf_path = os.path.join(temp_dir, f"{zip_name}.pdf")
-
-        # Download ZIP file with progress
-        async def download_progress(current, total):
-            await update_progress_bar(progress_message, current, total, "Downloading ZIP")
-
-        try:
-            await message.download(zip_path, progress=download_progress)
-        except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error downloading file: {e}</b>", parse_mode=ParseMode.HTML)
-            return
-
-        # Extract ZIP file with progress
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                file_list = zip_ref.namelist()
-                total_files = len(file_list)
-                for i, file in enumerate(file_list, 1):
-                    zip_ref.extract(file, extract_folder)
-                    await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
-        except zipfile.BadZipFile:
-            await progress_message.edit_text("<b>❌ Invalid ZIP file.</b>", parse_mode=ParseMode.HTML)
-            return
-
-        # Supported image formats
-        valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
-
-        # Get image files, sorted naturally
-        image_files = natural_sort([
-            os.path.join(extract_folder, f) for f in os.listdir(extract_folder)
-            if f.lower().endswith(valid_extensions)
-        ])
-
-        if not image_files:
-            await progress_message.edit_text("<b>❌ No images found in the ZIP.</b>", parse_mode=ParseMode.HTML)
-            return
-
-        # Convert images to PDF with progress
-        async def pdf_progress(current, total):
-            await update_progress_bar(progress_message, current, total, "Converting to PDF")
-
-        try:
-            generate_pdf(image_files, pdf_path, pdf_progress)
-        except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error converting to PDF: {e}</b>", parse_mode=ParseMode.HTML)
-            return
-
-        # Upload PDF
-        try:
-            await message.reply_document(
-                document=pdf_path,
-                caption=f"<b>Here is your PDF: {zip_name}.pdf 📄</b>",
-                parse_mode=ParseMode.HTML
-            )
-            await progress_message.edit_text("<b>✅ PDF generated and sent!</b>", parse_mode=ParseMode.HTML)
-        except Exception as e:
-            await progress_message.edit_text(f"<b>❌ Error uploading PDF: {e}</b>", parse_mode=ParseMode.HTML)
+    await message.reply_text(
+        "<b>File received! Choose an option below:</b>",
+        reply_markup=inline_buttons,
+        parse_mode=ParseMode.HTML
+    )
