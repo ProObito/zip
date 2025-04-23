@@ -74,7 +74,7 @@ async def get_media_preference(user_id: int) -> str:
     return user.get("media_preference", "default") if user else "default"
 
 # Command Handlers
-@Client.on_message(filters.private & filters.command("addautho_user") & filters.user(ADMIN_IDS))
+@Client.on_message(filters.private & filters.command("addautho_user") & filters.user(ADMIN))
 async def add_authorise_user(client: Client, message: Message):
     ids = message.text.removeprefix("/addautho_user").strip().split()
     check = True
@@ -104,7 +104,7 @@ async def add_authorise_user(client: Client, message: Message):
             parse_mode="html"
         )
 
-@Client.on_message(filters.private & filters.command("delautho_user") & filters.user(ADMIN_IDS))
+@Client.on_message(filters.private & filters.command("delautho_user") & filters.user(ADMIN))
 async def delete_authorise_user(client: Client, message: Message):
     ids = message.text.removeprefix("/delautho_user").strip().split()
     check = True
@@ -134,7 +134,7 @@ async def delete_authorise_user(client: Client, message: Message):
             parse_mode="html"
         )
 
-@Client.on_message(filters.private & filters.command("autho_users") & filters.user(ADMIN_IDS))
+@Client.on_message(filters.private & filters.command("autho_users") & filters.user(ADMIN))
 async def authorise_user_list(client: Client, message: Message):
     autho_users = await get_all_autho_users()
     if autho_users:
@@ -277,7 +277,7 @@ async def handle_close_callback(client: Client, callback_query):
 @Client.on_message(filters.private & filters.command("pdf"))
 async def pdf_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id) or user_id in ADMIN_IDS
+    check = await is_autho_user_exist(user_id) or user_id in ADMIN
     if not check:
         await message.reply_text(
             f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
