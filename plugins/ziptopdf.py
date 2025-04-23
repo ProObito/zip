@@ -8,6 +8,89 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 import os, re, zipfile, tempfile, asyncio
 
+@Client.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN))
+async def addauthorise_user(client, message):
+    ids = message.text.removeprefix("/addautho_user").strip().split()
+    check = 1
+
+    try:
+        if len(ids)>0:
+            for id in ids:
+                if len(id) == 10 and id.isdigit():
+                    await madflixbotz.add_autho_user(int(id))
+                else:
+                    check = 0
+                    break
+        else:
+            check = 0
+    except ValueError:
+        check = 0
+
+    if check == 1:
+        await message.reply_text(f'**Authorised Users Added ✅**\n<blockquote>`{" ".join(ids)}`</blockquote>')
+    else:
+        await message.reply_text(f"**INVALID USE OF COMMAND:**\n"
+                                 "<blockquote>**➪ Check if the command is empty OR the added ID should be correct (10 digit numbers)**</blockquote>")
+
+@Client.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN))
+async def deleteauthorise_user(client, message):
+    ids = message.text.removeprefix("/delautho_user").strip().split()
+    check = 1
+
+    try:
+        if len(ids)>0:
+            for id in ids:
+                if len(id) == 10 and id.isdigit():
+                    await madflixbotz.remove_autho_user(int(id))
+                else:
+                    check = 0
+                    break
+        else:
+            check = 0
+    except ValueError:
+        check = 0
+
+    if check == 1:
+        await message.reply_text(f'**Delete Authorised Users 🆑**\n<blockquote>`{" ".join(ids)}`</blockquote>')
+    else:
+        await message.reply_text(f"**INVALID USE OF COMMAND:**\n"
+                                 "<blockquote>**➪ Check if the command is empty OR the added ID should be correct (10 digit numbers)**</blockquote>\n")
+                                
+
+@Client.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN))
+async def authorise_user_list(client, message):
+    autho_users = await madflixbotz.get_all_autho_users()
+    if autho_users:
+        autho_users_str = "\n".join(map(str, autho_users))
+        await message.reply(f"🚻 **AUTHORIZED USERS:** 🌀\n\n`{autho_users_str}`")
+    else:
+        await message.reply("No authorized users found.")
+
+    #list = await madflixbotz.get_autho_user
+    #await message.reply_text(f"**AUTHORISED USER LIST 🌀**\n<blockquote>`{AUTHO_USER}`</blockquote>")
+
+@Client.on_message(filters.private & filters.command("check_autho"))
+async def check_authorise_user(client, message):
+    user_id = message.from_user.id
+    check = await madflixbotz.is_autho_user_exist(user_id)
+    if check:
+        await message.reply_text("**Yes, You are Authorised user 🟢**\n**<blockquote>You can send files to Rename..</blockquote>**")
+    else:
+        await message.reply_text("**Nope, You are not Authorised user 🔴**\n<blockquote>**You can't send files to Rename..**</blockquote>\n**Contact @i_killed_my_clan to add you as Authorised user**")
+        
+
+@Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def auto_rename_files(client, message):
+ user_id = message.from_user.id
+ check = await madflixbotz.is_autho_user_exist(user_id)
+ if not check:
+    await message.reply_text("<b>⚠️ You are not Authorised User ⚠️<blockquote>If you want to use this bot, then please contact: @Shidoteshika1</blockquote></b>")
+    return
+ else:
+    firstname = message.from_user.first_name
+    format_template = await madflixbotz.get_format_template(user_id)
+    media_preference = await madflixbotz.get_media_preference(user_id)
+
 def natural_sort(files):
     return sorted(files, key=lambda f: [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', f)])
 
