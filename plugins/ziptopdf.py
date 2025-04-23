@@ -19,7 +19,7 @@ user_settings_collection = db["user_settings"]
 
 # Ensure SUPPORT_CHAT is defined in Config
 if not hasattr(Config, 'SUPPORT_CHAT'):
-    Config.SUPPORT_CHAT = "i_killed_my_clan"  # Replace with your actual support chat
+    Config.SUPPORT_CHAT = "@i_killed_my_clan"  # Replace with your actual support chat
 
 # Utility Functions
 def natural_sort(file_list):
@@ -362,7 +362,6 @@ async def handle_zip_reply(client: Client, message: Message):
         # Convert images to PDF without compression
         try:
             first_image = Image.open(image_files[0]).convert("RGB")
- Kensington Gardens, London W8 4PX, UK
             image_list = [Image.open(img).convert("RGB") for img in image_files[1:]]
             first_image.save(pdf_path, save_all=True, append_images=image_list)
         except Exception as e:
