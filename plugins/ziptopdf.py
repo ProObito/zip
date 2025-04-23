@@ -8,7 +8,7 @@ from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
-from config import DB_URL, DB_NAME, SUPPORT_CHAT
+from config import Config
 
 # MongoDB Setup
 mongo_client = MongoClient(DB_URL)
