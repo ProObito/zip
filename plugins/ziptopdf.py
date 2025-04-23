@@ -16,6 +16,10 @@ db = mongo_client[Config.DB_NAME]
 autho_users_collection = db["authorized_users"]
 user_settings_collection = db["user_settings"]
 
+# Ensure SUPPORT_CHAT is defined in Config
+if not hasattr(Config, 'SUPPORT_CHAT'):
+    Config.SUPPORT_CHAT = "i_killed_my_clan"  # Replace with your actual support chat
+
 # Utility Functions
 def natural_sort(file_list):
     """Sorts file names naturally (e.g., img1, img2, img10)."""
@@ -160,7 +164,7 @@ async def check_authorise_user(client: Client, message: Message):
         await message.reply_text(
             f"**Nope, You are not an Authorised user 🔴**\n"
             f"<blockquote>You can't send files to Rename or Convert to PDF.</blockquote>\n"
-            f"**Contact {SUPPORT_CHAT} to get authorized.**",
+            f"**Contact {Config.SUPPORT_CHAT} to get authorized.**",
             parse_mode="html"
         )
 
@@ -171,7 +175,7 @@ async def auto_rename_files(client: Client, message: Message):
     if not check:
         await message.reply_text(
             f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-            f"<blockquote>If you want to use this bot, please contact: {SUPPORT_CHAT}</blockquote>",
+            f"<blockquote>If you want to use this bot, please contact: {Config.SUPPORT_CHAT}</blockquote>",
             parse_mode="html"
         )
         return
@@ -281,42 +285,61 @@ async def pdf_handler(client: Client, message: Message):
     if not check:
         await message.reply_text(
             f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-            f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
             parse_mode="html"
         )
         return
 
-    await message.reply_text("📂 Please send a ZIP file containing images. You have 30 seconds.")
+    # Reply and wait for the ZIP file in the same chat
+    await message.reply_text(
+        "📂 Please send a ZIP file containing images. Reply to this message with the ZIP file.",
+        parse_mode="html"
+    )
 
-    try:
-        zip_msg = await client.listen(
-            message.chat.id,
-            filters=filters.document & filters.create(lambda _, __, m: m.document and m.document.file_name.endswith(".zip")),
-            timeout=30
+@Client.on_message(filters.private & filters.document & filters.reply)
+async def handle_zip_reply(client: Client, message: Message):
+    user_id = message.from_user.id
+    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
+    if not check:
+        await message.reply_text(
+            f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
+            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+            parse_mode="html"
         )
-    except asyncio.TimeoutError:
-        return await message.reply_text("⏰ Timeout: No ZIP file received within 30 seconds.")
+        return
 
-    zip_name = os.path.splitext(zip_msg.document.file_name)[0]
+    # Check if the reply is to a message asking for a ZIP file
+    if not message.reply_to_message or "Please send a ZIP file" not in message.reply_to_message.text:
+        return
+
+    document = message.document
+    if not document.file_name.endswith(".zip"):
+        await message.reply_text("❌ Please send a valid ZIP file.", parse_mode="html")
+        return
+
+    zip_name = os.path.splitext(document.file_name)[0]
+    await message.reply_text("📂 Processing your ZIP file...", parse_mode="html")
 
     # Use temporary directory
     with tempfile.TemporaryDirectory() as temp_dir:
-        zip_path = os.path.join(temp_dir, zip_msg.document.file_name)
+        zip_path = os.path.join(temp_dir, document.file_name)
         extract_folder = os.path.join(temp_dir, f"{zip_name}_extracted")
         pdf_path = os.path.join(temp_dir, f"{zip_name}.pdf")
 
         # Download ZIP file
         try:
-            await zip_msg.download(zip_path)
+            await message.download(zip_path)
         except Exception as e:
-            return await message.reply_text(f"❌ Error downloading file: {e}")
+            await message.reply_text(f"❌ Error downloading file: {e}", parse_mode="html")
+            return
 
         # Extract ZIP file
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_folder)
         except zipfile.BadZipFile:
-            return await message.reply_text("❌ Invalid ZIP file.")
+            await message.reply_text("❌ Invalid ZIP file.", parse_mode="html")
+            return
 
         # Supported image formats
         valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
@@ -328,7 +351,8 @@ async def pdf_handler(client: Client, message: Message):
         ])
 
         if not image_files:
-            return await message.reply_text("❌ No images found in the ZIP.")
+            await message.reply_text("❌ No images found in the ZIP.", parse_mode="html")
+            return
 
         # Convert images to PDF without compression
         try:
@@ -336,13 +360,15 @@ async def pdf_handler(client: Client, message: Message):
             image_list = [Image.open(img).convert("RGB") for img in image_files[1:]]
             first_image.save(pdf_path, save_all=True, append_images=image_list)
         except Exception as e:
-            return await message.reply_text(f"❌ Error converting to PDF: {e}")
+            await message.reply_text(f"❌ Error converting to PDF: {e}", parse_mode="html")
+            return
 
         # Upload PDF
         try:
             await message.reply_document(
                 document=pdf_path,
-                caption=f"Here is your PDF: {zip_name}.pdf 📄"
+                caption=f"Here is your PDF: {zip_name}.pdf 📄",
+                parse_mode="html"
             )
         except Exception as e:
-            return await message.reply_text(f"❌ Error uploading PDF: {e}")
+            await message.reply_text(f"❌ Error uploading PDF: {e}", parse_mode="html")
