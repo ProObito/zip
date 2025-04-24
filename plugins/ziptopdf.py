@@ -250,7 +250,7 @@ async def handle_zip_file(client: Client, message: Message):
         parse_mode=ParseMode.HTML
     )
 
-    # Store context in MongoDB (with fallback if MongoDB is down)
+    # Store context in MongoDB
     if user_settings_collection is not None:
         try:
             await user_settings_collection.update_one(
@@ -296,6 +296,10 @@ async def handle_pdf_name_reply(client: Client, message: Message):
         # Check if the reply is to a message asking for a PDF name
         if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
             logger.warning(f"Reply not to PDF name prompt for user {user_id}")
+            await message.reply_text(
+                "<b>❌ Please reply to the bot's prompt message asking for the PDF name.</b>",
+                parse_mode=ParseMode.HTML
+            )
             return
 
         # Get the new PDF name
@@ -322,25 +326,35 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                     )
                     logger.info(f"Cleared conversion context for user {user_id}")
                 else:
-                    logger.error(f"No pending PDF conversion for user {user_id}")
-                    await message.reply_text(
-                        "<b>❌ No pending PDF conversion found. Please start over.</b>",
-                        parse_mode=ParseMode.HTML
-                    )
-                    return
+                    logger.error(f"No pending PDF conversion found in MongoDB for user {user_id}")
             except Exception as e:
                 logger.error(f"MongoDB retrieve error for user {user_id}: {e}")
-        else:
-            logger.warning(f"MongoDB not available, checking reply_to_message for user {user_id}")
-            # Fallback: Use reply_to_message if MongoDB is down
-            if not message.reply_to_message.reply_to_message or not message.reply_to_message.reply_to_message.document:
-                logger.error(f"No valid ZIP in reply_to_message for user {user_id}")
+
+        # Fallback to reply_to_message if MongoDB context is unavailable
+        if conversion_data is None:
+            logger.info(f"Attempting fallback to reply_to_message for user {user_id}")
+            if not message.reply_to_message.reply_to_message:
+                logger.error(f"No reply_to_message.reply_to_message for user {user_id}")
                 await message.reply_text(
-                    "<b>❌ No valid ZIP file found. Please start over.</b>",
+                    "<b>❌ No valid ZIP file found. Please send the ZIP file again.</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            if not message.reply_to_message.reply_to_message.document:
+                logger.error(f"No document in reply_to_message.reply_to_message for user {user_id}")
+                await message.reply_text(
+                    "<b>❌ No valid ZIP file found in the reply chain. Please send the ZIP file again.</b>",
                     parse_mode=ParseMode.HTML
                 )
                 return
             document = message.reply_to_message.reply_to_message.document
+            if not document.file_name.endswith(".zip"):
+                logger.error(f"File {document.file_name} is not a ZIP for user {user_id}")
+                await message.reply_text(
+                    "<b>❌ The file is not a valid ZIP. Please send a ZIP file.</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
             conversion_data = {
                 "message_id": message.reply_to_message.reply_to_message.id,
                 "chat_id": message.chat.id,
@@ -349,6 +363,13 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                     "file_name": document.file_name
                 }
             }
+            logger.info(f"Fallback conversion context retrieved for user {user_id}")
+
+        # Log message structure for debugging
+        logger.info(f"Message structure for user {user_id}: "
+                    f"reply_to_message={message.reply_to_message is not None}, "
+                    f"reply_to_message.reply_to_message={message.reply_to_message.reply_to_message is not None if message.reply_to_message else False}, "
+                    f"document={conversion_data['document']}")
 
         message_id = conversion_data["message_id"]
         chat_id = conversion_data["chat_id"]
@@ -373,8 +394,9 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 await update_progress_bar(progress_message, current, total, "Downloading ZIP")
 
             try:
+                # Download using file_id directly
                 await client.download_media(
-                    message=message.reply_to_message.reply_to_message,  # Original ZIP message
+                    file_ref=document_file_id,
                     file_name=zip_path,
                     progress=download_progress
                 )
@@ -382,7 +404,7 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             except Exception as e:
                 logger.error(f"Download error for user {user_id}: {e}")
                 await progress_message.edit_text(
-                    f"<b>❌ Error downloading file: {e}</b>",
+                    f"<b>❌ Error downloading file: {str(e)}</b>",
                     parse_mode=ParseMode.HTML
                 )
                 return
@@ -510,7 +532,7 @@ async def handle_zip_reply(client: Client, message: Message):
         parse_mode=ParseMode.HTML
     )
 
-    # Store context in MongoDB (with fallback if MongoDB is down)
+    # Store context in MongoDB
     if user_settings_collection is not None:
         try:
             await user_settings_collection.update_one(
