@@ -8,7 +8,7 @@ from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ParseMode
-from pymongo import MongoClient
+import motor.motor_asyncio
 from config import Config
 import logging
 
@@ -16,9 +16,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# MongoDB Setup
+# MongoDB Setup (using motor like database.py)
 try:
-    mongo_client = MongoClient(Config.DB_URL)
+    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(Config.DB_URL)
     db = mongo_client[Config.DB_NAME]
     autho_users_collection = db["authorized_users"]
     user_settings_collection = db["user_settings"]
@@ -84,8 +84,8 @@ async def update_progress_bar(message: Message, current: int, total: int, stage:
 # MongoDB Helper Functions
 async def add_autho_user(user_id: int):
     """Add an authorized user to MongoDB."""
-    if autho_users_collection:
-        autho_users_collection.update_one(
+    if autho_users_collection is not None:
+        await autho_users_collection.update_one(
             {"user_id": user_id},
             {"$set": {"user_id": user_id}},
             upsert=True
@@ -93,32 +93,36 @@ async def add_autho_user(user_id: int):
 
 async def remove_autho_user(user_id: int):
     """Remove an authorized user from MongoDB."""
-    if autho_users_collection:
-        autho_users_collection.delete_one({"user_id": user_id})
+    if autho_users_collection is not None:
+        await autho_users_collection.delete_one({"user_id": user_id})
 
 async def is_autho_user_exist(user_id: int) -> bool:
     """Check if a user is authorized."""
-    if autho_users_collection:
-        return bool(autho_users_collection.find_one({"user_id": user_id}))
+    if autho_users_collection is not None:
+        user = await autho_users_collection.find_one({"user_id": user_id})
+        return bool(user)
     return False
 
 async def get_all_autho_users() -> list:
     """Get list of all authorized users."""
-    if autho_users_collection:
-        return [doc["user_id"] for doc in autho_users_collection.find()]
+    if autho_users_collection is not None:
+        users = []
+        async for doc in autho_users_collection.find():
+            users.append(doc["user_id"])
+        return users
     return []
 
 async def get_format_template(user_id: int) -> str:
     """Get format template for a user (default if not set)."""
-    if user_settings_collection:
-        user = user_settings_collection.find_one({"user_id": user_id})
+    if user_settings_collection is not None:
+        user = await user_settings_collection.find_one({"user_id": user_id})
         return user.get("format_template", "default_format") if user else "default_format"
     return "default_format"
 
 async def get_media_preference(user_id: int) -> str:
     """Get media preference for a user (default if not set)."""
-    if user_settings_collection:
-        user = user_settings_collection.find_one({"user_id": user_id})
+    if user_settings_collection is not None:
+        user = await user_settings_collection.find_one({"user_id": user_id})
         return user.get("media_preference", "default") if user else "default"
     return "default"
 
@@ -201,23 +205,23 @@ async def authorise_user_list(client: Client, message: Message):
 @Client.on_message(filters.private & filters.command("check_autho"))
 async def check_authorise_user(client: Client, message: Message):
     user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id)
+    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
     if check:
         await message.reply_text(
             "<b>Yes, You are an Authorised user 🟢</b>\n"
-            "<blockquote>You can send files to Rename or Convert to PDF.</blockquote>",
+            "<blockquote>You can send files to Convert to PDF.</blockquote>",
             parse_mode=ParseMode.HTML
         )
     else:
         await message.reply_text(
             f"<b>Nope, You are not an Authorised user 🔴</b>\n"
-            f"<blockquote>You can't send files to Rename or Convert to PDF.</blockquote>\n"
+            f"<blockquote>You can't send files to Convert to PDF.</blockquote>\n"
             f"<b>Contact {Config.SUPPORT_CHAT} to get authorized.</b>",
             parse_mode=ParseMode.HTML
         )
 
-@Client.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def auto_rename_files(client: Client, message: Message):
+@Client.on_message(filters.private & filters.document)
+async def handle_zip_file(client: Client, message: Message):
     user_id = message.from_user.id
     logger.info(f"Received file from user {user_id}")
     check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
@@ -230,98 +234,48 @@ async def auto_rename_files(client: Client, message: Message):
         )
         return
 
-    # Add inline buttons for Zip to PDF and Close
-    inline_buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Zip to PDF 📄", callback_data=f"convert_pdf_{message.id}")],
-        [InlineKeyboardButton("Close ❌", callback_data="close")]
-    ])
+    document = message.document
+    if not document or not document.file_name.endswith(".zip"):
+        logger.error(f"File {document.file_name if document else 'None'} is not a ZIP")
+        await message.reply_text(
+            "<b>❌ Please send a valid ZIP file.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
 
-    await message.reply_text(
-        "<b>File received! Choose an option below:</b>",
-        reply_markup=inline_buttons,
+    # Prompt for new PDF name
+    logger.info(f"Prompting user {user_id} for new PDF name")
+    prompt_message = await message.reply_text(
+        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
         parse_mode=ParseMode.HTML
     )
-    logger.info(f"Sent inline keyboard for message {message.id}")
 
-@Client.on_callback_query(filters.regex(r"convert_pdf_(\d+)"))
-async def handle_convert_pdf_callback(client: Client, callback_query):
-    user_id = callback_query.from_user.id
-    message_id = int(callback_query.data.split("_")[2])
-    logger.info(f"Callback received: convert_pdf_{message_id} from user {user_id}")
-
-    try:
-        # Check authorization
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-        if not check:
-            logger.warning(f"User {user_id} not authorized")
-            await callback_query.answer("You are not authorized to perform this action.", show_alert=True)
-            return
-
-        # Get the original message
-        message = callback_query.message
-        chat_id = message.chat.id
-        logger.info(f"Processing callback for chat {chat_id}, message {message_id}")
-
-        # Check if the message has a document
-        if not message.reply_to_message:
-            logger.error(f"No reply_to_message found for message {message_id}")
-            await callback_query.answer("No file found. Please send the ZIP file again.", show_alert=True)
-            await message.edit_text(
-                "<b>❌ No file found. Please send the ZIP file again.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        document = message.reply_to_message.document
-        if not document or not document.file_name.endswith(".zip"):
-            logger.error(f"No valid ZIP document found for message {message_id}")
-            await callback_query.answer("Please send a ZIP file for conversion.", show_alert=True)
-            await message.edit_text(
-                "<b>❌ Please send a valid ZIP file.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        # Prompt for new PDF name
-        logger.info(f"Prompting user {user_id} for new PDF name")
-        await callback_query.message.edit_text(
-            "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
-            parse_mode=ParseMode.HTML
-        )
-
-        # Store context in MongoDB (with fallback if MongoDB is down)
-        if user_settings_collection:
-            try:
-                user_settings_collection.update_one(
-                    {"user_id": user_id},
-                    {"$set": {
-                        "pending_pdf_conversion": {
-                            "message_id": message_id,
-                            "chat_id": chat_id,
-                            "document": {
-                                "file_id": document.file_id,
-                                "file_name": document.file_name
-                            }
+    # Store context in MongoDB (with fallback if MongoDB is down)
+    if user_settings_collection is not None:
+        try:
+            await user_settings_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "pending_pdf_conversion": {
+                        "message_id": message.id,
+                        "chat_id": message.chat.id,
+                        "document": {
+                            "file_id": document.file_id,
+                            "file_name": document.file_name
                         }
-                    }},
-                    upsert=True
-                )
-                logger.info(f"Stored conversion context for user {user_id}")
-            except Exception as e:
-                logger.error(f"MongoDB store error for user {user_id}: {e}")
-                await callback_query.answer("Database error, but you can still reply with the PDF name.", show_alert=True)
-        else:
-            logger.warning(f"MongoDB not available, proceeding with prompt for user {user_id}")
-
-        await callback_query.answer("Reply with the new PDF name.")
-
-    except Exception as e:
-        logger.error(f"Error in handle_convert_pdf_callback for user {user_id}: {e}")
-        await callback_query.message.edit_text(
-            f"<b>❌ Error: {str(e)}</b>",
-            parse_mode=ParseMode.HTML
-        )
-        await callback_query.answer("An error occurred. Please try again.", show_alert=True)
+                    }
+                }},
+                upsert=True
+            )
+            logger.info(f"Stored conversion context for user {user_id}")
+        except Exception as e:
+            logger.error(f"MongoDB store error for user {user_id}: {e}")
+            await message.reply_text(
+                "<b>⚠️ Database error, but you can still reply with the PDF name.</b>",
+                parse_mode=ParseMode.HTML
+            )
+    else:
+        logger.warning(f"MongoDB not available, proceeding with prompt for user {user_id}")
 
 @Client.on_message(filters.private & filters.text & filters.reply)
 async def handle_pdf_name_reply(client: Client, message: Message):
@@ -356,23 +310,26 @@ async def handle_pdf_name_reply(client: Client, message: Message):
 
         # Retrieve conversion context from MongoDB
         conversion_data = None
-        if user_settings_collection:
-            user_data = user_settings_collection.find_one({"user_id": user_id})
-            if user_data and "pending_pdf_conversion" in user_data:
-                conversion_data = user_data["pending_pdf_conversion"]
-                # Clear pending conversion from MongoDB
-                user_settings_collection.update_one(
-                    {"user_id": user_id},
-                    {"$unset": {"pending_pdf_conversion": ""}}
-                )
-                logger.info(f"Cleared conversion context for user {user_id}")
-            else:
-                logger.error(f"No pending PDF conversion for user {user_id}")
-                await message.reply_text(
-                    "<b>❌ No pending PDF conversion found. Please start over.</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
+        if user_settings_collection is not None:
+            try:
+                user_data = await user_settings_collection.find_one({"user_id": user_id})
+                if user_data and "pending_pdf_conversion" in user_data:
+                    conversion_data = user_data["pending_pdf_conversion"]
+                    # Clear pending conversion from MongoDB
+                    await user_settings_collection.update_one(
+                        {"user_id": user_id},
+                        {"$unset": {"pending_pdf_conversion": ""}}
+                    )
+                    logger.info(f"Cleared conversion context for user {user_id}")
+                else:
+                    logger.error(f"No pending PDF conversion for user {user_id}")
+                    await message.reply_text(
+                        "<b>❌ No pending PDF conversion found. Please start over.</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+            except Exception as e:
+                logger.error(f"MongoDB retrieve error for user {user_id}: {e}")
         else:
             logger.warning(f"MongoDB not available, checking reply_to_message for user {user_id}")
             # Fallback: Use reply_to_message if MongoDB is down
@@ -507,12 +464,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
-@Client.on_callback_query(filters.regex("close"))
-async def handle_close_callback(client: Client, callback_query):
-    logger.info(f"Close callback received from user {callback_query.from_user.id}")
-    await callback_query.message.delete()
-    await callback_query.answer("Message closed.")
-
 @Client.on_message(filters.private & filters.command("pdf"))
 async def pdf_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -552,16 +503,36 @@ async def handle_zip_reply(client: Client, message: Message):
         await message.reply_text("<b>❌ Please send a valid ZIP file.</b>", parse_mode=ParseMode.HTML)
         return
 
-    # Add inline buttons for Zip to PDF and Close
-    inline_buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Zip to PDF 📄", callback_data=f"convert_pdf_{message.id}")],
-        [InlineKeyboardButton("Close ❌", callback_data="close")]
-    ])
-
-    await message.reply_text(
-        "<b>File received! Choose an option below:</b>",
-        reply_markup=inline_buttons,
+    # Prompt for new PDF name
+    logger.info(f"Prompting user {user_id} for new PDF name")
+    prompt_message = await message.reply_text(
+        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
         parse_mode=ParseMode.HTML
     )
-    logger.info(f"Sent inline keyboard for message {message.id}")
-    
+
+    # Store context in MongoDB (with fallback if MongoDB is down)
+    if user_settings_collection is not None:
+        try:
+            await user_settings_collection.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "pending_pdf_conversion": {
+                        "message_id": message.id,
+                        "chat_id": message.chat.id,
+                        "document": {
+                            "file_id": document.file_id,
+                            "file_name": document.file_name
+                        }
+                    }
+                }},
+                upsert=True
+            )
+            logger.info(f"Stored conversion context for user {user_id}")
+        except Exception as e:
+            logger.error(f"MongoDB store error for user {user_id}: {e}")
+            await message.reply_text(
+                "<b>⚠️ Database error, but you can still reply with the PDF name.</b>",
+                parse_mode=ParseMode.HTML
+            )
+    else:
+        logger.warning(f"MongoDB not available, proceeding with prompt for user {user_id}")
