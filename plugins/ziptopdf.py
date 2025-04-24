@@ -71,11 +71,14 @@ def generate_pdf(image_files, output_path, progress_callback=None):
 # Progress Bar Utility
 async def update_progress_bar(message: Message, current: int, total: int, stage: str):
     """Update Telegram message with a text-based progress bar."""
-    percentage = int((current / total) * 100)
-    bar_length = 10
-    filled = int(bar_length * current / total)
-    bar = "█" * filled + " " * (bar_length - filled)
-    text = f"<b>{stage}: [{bar}] {percentage}%</b>"
+    if total == 0:
+        text = f"<b>{stage}: [          ] 0% (empty file)</b>"
+    else:
+        percentage = int((current / total) * 100)
+        bar_length = 10
+        filled = int(bar_length * current / total)
+        bar = "█" * filled + " " * (bar_length - filled)
+        text = f"<b>{stage}: [{bar}] {percentage}%</b>"
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -94,7 +97,7 @@ async def add_autho_user(user_id: int):
 async def remove_autho_user(user_id: int):
     """Remove an authorized user from MongoDB."""
     if autho_users_collection is not None:
-        await autho_users_collection.delete_one({"user_id": user_id})
+        autho_users_collection.delete_one({"user_id": user_id})
 
 async def is_autho_user_exist(user_id: int) -> bool:
     """Check if a user is authorized."""
@@ -374,6 +377,7 @@ async def handle_pdf_name_reply(client: Client, message: Message):
         # Use temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             zip_path = os.path.join(temp_dir, original_file_name)
+            debug_zip_path = f"/tmp/{user_id}_{original_file_name}"  # Save for debugging
             extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
             pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
 
@@ -383,12 +387,32 @@ async def handle_pdf_name_reply(client: Client, message: Message):
 
             try:
                 logger.info(f"Attempting to download file_id {document_file_id} for user {user_id}")
+                # Fetch the original message using message_id and chat_id
+                original_message = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+                if not original_message or not original_message.document:
+                    logger.error(f"Failed to fetch original message for user {user_id}, message_id {message_id}")
+                    await progress_message.edit_text(
+                        "<b>❌ Failed to access the ZIP file. Please send it again.</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+
                 await client.download_media(
-                    message=document_file_id,  # Use file_id directly
+                    message=original_message,
                     file_name=zip_path,
                     progress=download_progress
                 )
-                logger.info(f"Downloaded ZIP for user {user_id}")
+                # Save a copy for debugging
+                shutil.copy(zip_path, debug_zip_path)
+                # Log file size
+                file_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+                logger.info(f"Downloaded ZIP for user {user_id}, size: {file_size} bytes, saved to {debug_zip_path}")
+                if file_size == 0:
+                    await progress_message.edit_text(
+                        "<b>❌ Downloaded file is empty. Please send a valid ZIP file.</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
             except Exception as e:
                 logger.error(f"Download error for user {user_id}: {e}")
                 await progress_message.edit_text(
@@ -402,14 +426,21 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     file_list = zip_ref.namelist()
                     total_files = len(file_list)
+                    if total_files == 0:
+                        logger.error(f"ZIP file is empty for user {user_id}")
+                        await progress_message.edit_text(
+                            "<b>❌ ZIP file is empty.</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
                     for i, file in enumerate(file_list, 1):
                         zip_ref.extract(file, extract_folder)
                         await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
                 logger.info(f"Extracted ZIP for user {user_id}")
-            except zipfile.BadZipFile:
-                logger.error(f"Invalid ZIP file for user {user_id}")
+            except zipfile.BadZipFile as e:
+                logger.error(f"Invalid ZIP file for user {user_id}: {e}")
                 await progress_message.edit_text(
-                    "<b>❌ Invalid ZIP file.</b>",
+                    f"<b>❌ Invalid ZIP file: {str(e)}. Please ensure the file is a valid ZIP.</b>",
                     parse_mode=ParseMode.HTML
                 )
                 return
@@ -551,4 +582,3 @@ async def handle_zip_reply(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
         return
-        
