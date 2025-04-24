@@ -275,7 +275,12 @@ async def handle_zip_file(client: Client, message: Message):
                 parse_mode=ParseMode.HTML
             )
     else:
-        logger.warning(f"MongoDB not available, proceeding with prompt for user {user_id}")
+        logger.error(f"MongoDB not available for user {user_id}")
+        await message.reply_text(
+            "<b>❌ Database unavailable. Please try again later.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
 
 @Client.on_message(filters.private & filters.text & filters.reply)
 async def handle_pdf_name_reply(client: Client, message: Message):
@@ -313,68 +318,51 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             return
 
         # Retrieve conversion context from MongoDB
-        conversion_data = None
-        if user_settings_collection is not None:
-            try:
-                user_data = await user_settings_collection.find_one({"user_id": user_id})
-                if user_data and "pending_pdf_conversion" in user_data:
-                    conversion_data = user_data["pending_pdf_conversion"]
-                    # Clear pending conversion from MongoDB
-                    await user_settings_collection.update_one(
-                        {"user_id": user_id},
-                        {"$unset": {"pending_pdf_conversion": ""}}
-                    )
-                    logger.info(f"Cleared conversion context for user {user_id}")
-                else:
-                    logger.error(f"No pending PDF conversion found in MongoDB for user {user_id}")
-            except Exception as e:
-                logger.error(f"MongoDB retrieve error for user {user_id}: {e}")
+        if user_settings_collection is None:
+            logger.error(f"MongoDB not available for user {user_id}")
+            await message.reply_text(
+                "<b>❌ Database unavailable. Please try again later.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
-        # Fallback to reply_to_message if MongoDB context is unavailable
-        if conversion_data is None:
-            logger.info(f"Attempting fallback to reply_to_message for user {user_id}")
-            if not message.reply_to_message.reply_to_message:
-                logger.error(f"No reply_to_message.reply_to_message for user {user_id}")
+        try:
+            user_data = await user_settings_collection.find_one({"user_id": user_id})
+            if not user_data or "pending_pdf_conversion" not in user_data:
+                logger.error(f"No pending PDF conversion found in MongoDB for user {user_id}")
                 await message.reply_text(
-                    "<b>❌ No valid ZIP file found. Please send the ZIP file again.</b>",
+                    "<b>❌ No pending PDF conversion found. Please send the ZIP file again.</b>",
                     parse_mode=ParseMode.HTML
                 )
                 return
-            if not message.reply_to_message.reply_to_message.document:
-                logger.error(f"No document in reply_to_message.reply_to_message for user {user_id}")
-                await message.reply_text(
-                    "<b>❌ No valid ZIP file found in the reply chain. Please send the ZIP file again.</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-            document = message.reply_to_message.reply_to_message.document
-            if not document.file_name.endswith(".zip"):
-                logger.error(f"File {document.file_name} is not a ZIP for user {user_id}")
-                await message.reply_text(
-                    "<b>❌ The file is not a valid ZIP. Please send a ZIP file.</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-            conversion_data = {
-                "message_id": message.reply_to_message.reply_to_message.id,
-                "chat_id": message.chat.id,
-                "document": {
-                    "file_id": document.file_id,
-                    "file_name": document.file_name
-                }
-            }
-            logger.info(f"Fallback conversion context retrieved for user {user_id}")
-
-        # Log message structure for debugging
-        logger.info(f"Message structure for user {user_id}: "
-                    f"reply_to_message={message.reply_to_message is not None}, "
-                    f"reply_to_message.reply_to_message={message.reply_to_message.reply_to_message is not None if message.reply_to_message else False}, "
-                    f"document={conversion_data['document']}")
+            conversion_data = user_data["pending_pdf_conversion"]
+            # Clear pending conversion from MongoDB
+            await user_settings_collection.update_one(
+                {"user_id": user_id},
+                {"$unset": {"pending_pdf_conversion": ""}}
+            )
+            logger.info(f"Cleared conversion context for user {user_id}")
+        except Exception as e:
+            logger.error(f"MongoDB retrieve error for user {user_id}: {e}")
+            await message.reply_text(
+                "<b>❌ Database error. Please send the ZIP file again.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
         message_id = conversion_data["message_id"]
         chat_id = conversion_data["chat_id"]
         document_file_id = conversion_data["document"]["file_id"]
         original_file_name = conversion_data["document"]["file_name"]
+
+        # Validate file_id
+        if not document_file_id:
+            logger.error(f"Invalid file_id for user {user_id}")
+            await message.reply_text(
+                "<b>❌ Invalid file ID. Please send the ZIP file again.</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
         # Start processing
         progress_message = await message.reply_text(
@@ -394,9 +382,9 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 await update_progress_bar(progress_message, current, total, "Downloading ZIP")
 
             try:
-                # Download using file_id directly
+                logger.info(f"Attempting to download file_id {document_file_id} for user {user_id}")
                 await client.download_media(
-                    file_ref=document_file_id,
+                    message=document_file_id,  # Use file_id directly
                     file_name=zip_path,
                     progress=download_progress
                 )
@@ -557,4 +545,10 @@ async def handle_zip_reply(client: Client, message: Message):
                 parse_mode=ParseMode.HTML
             )
     else:
-        logger.warning(f"MongoDB not available, proceeding with prompt for user {user_id}")
+        logger.error(f"MongoDB not available for user {user_id}")
+        await message.reply_text(
+            "<b>❌ Database unavailable. Please try again later.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+        
