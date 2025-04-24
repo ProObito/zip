@@ -362,7 +362,7 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 "<b>❌ Invalid file ID. Please send the ZIP file again.</b>",
                 parse_mode=ParseMode.HTML
             )
-               return
+            return
 
         progress_message = await message.reply_text(
             "<b>📂 Processing your ZIP file...</b>",
