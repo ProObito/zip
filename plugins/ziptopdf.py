@@ -6,7 +6,7 @@ import asyncio
 import shutil
 from PIL import Image
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 import motor.motor_asyncio
 from config import Config
@@ -16,7 +16,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# MongoDB Setup (using motor like database.py)
+# MongoDB Setup
 try:
     mongo_client = motor.motor_asyncio.AsyncIOMotorClient(Config.DB_URL)
     db = mongo_client[Config.DB_NAME]
@@ -28,17 +28,19 @@ except Exception as e:
     autho_users_collection = None
     user_settings_collection = None
 
-# Ensure SUPPORT_CHAT is defined in Config
+# Ensure SUPPORT_CHAT
 if not hasattr(Config, 'SUPPORT_CHAT'):
-    Config.SUPPORT_CHAT = "@YourSupportChat"  # Replace with your actual support chat
+    Config.SUPPORT_CHAT = "@YourSupportChat"
+
+# Constants
+MAX_FILES = 100  # Max files in ZIP
+MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 100 MB max extracted size
 
 # Utility Functions
 def natural_sort(file_list):
-    """Sorts file names naturally (e.g., img1, img2, img10)."""
     return sorted(file_list, key=lambda f: [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', f)])
 
 def remove_duplicates(file_list):
-    """Keep base image (e.g., 1.jpg) and remove variants like 1t.jpg."""
     base_map = {}
     valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
     for file in file_list:
@@ -53,11 +55,9 @@ def remove_duplicates(file_list):
     return list(base_map.values())
 
 def sanitize_filename(name: str) -> str:
-    """Sanitize filename to remove invalid characters."""
     return re.sub(r'[^\w\-_\. ]', '', name).strip()
 
 def generate_pdf(image_files, output_path, progress_callback=None):
-    """Convert images to PDF without compression, with progress tracking."""
     total = len(image_files)
     image_iter = (Image.open(f).convert("RGB") for f in image_files)
     first = next(image_iter)
@@ -68,9 +68,8 @@ def generate_pdf(image_files, output_path, progress_callback=None):
             progress_callback(i, total)
     first.save(output_path, save_all=True, append_images=images[1:])
 
-# Progress Bar Utility
+# Progress Bar
 async def update_progress_bar(message: Message, current: int, total: int, stage: str):
-    """Update Telegram message with a text-based progress bar."""
     if total == 0:
         text = f"<b>{stage}: [          ] 0% (empty file)</b>"
     else:
@@ -82,11 +81,13 @@ async def update_progress_bar(message: Message, current: int, total: int, stage:
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error(f"Failed to update progress bar: {e}")
+        if "MESSAGE_NOT_MODIFIED" in str(e):
+            pass  # Ignore duplicate updates
+        else:
+            logger.error(f"Failed to update progress bar: {e}")
 
-# MongoDB Helper Functions
+# MongoDB Helpers
 async def add_autho_user(user_id: int):
-    """Add an authorized user to MongoDB."""
     if autho_users_collection is not None:
         await autho_users_collection.update_one(
             {"user_id": user_id},
@@ -95,19 +96,16 @@ async def add_autho_user(user_id: int):
         )
 
 async def remove_autho_user(user_id: int):
-    """Remove an authorized user from MongoDB."""
     if autho_users_collection is not None:
-        autho_users_collection.delete_one({"user_id": user_id})
+        await autho_users_collection.delete_one({"user_id": user_id})
 
 async def is_autho_user_exist(user_id: int) -> bool:
-    """Check if a user is authorized."""
     if autho_users_collection is not None:
         user = await autho_users_collection.find_one({"user_id": user_id})
         return bool(user)
     return False
 
 async def get_all_autho_users() -> list:
-    """Get list of all authorized users."""
     if autho_users_collection is not None:
         users = []
         async for doc in autho_users_collection.find():
@@ -116,14 +114,12 @@ async def get_all_autho_users() -> list:
     return []
 
 async def get_format_template(user_id: int) -> str:
-    """Get format template for a user (default if not set)."""
     if user_settings_collection is not None:
         user = await user_settings_collection.find_one({"user_id": user_id})
         return user.get("format_template", "default_format") if user else "default_format"
     return "default_format"
 
 async def get_media_preference(user_id: int) -> str:
-    """Get media preference for a user (default if not set)."""
     if user_settings_collection is not None:
         user = await user_settings_collection.find_one({"user_id": user_id})
         return user.get("media_preference", "default") if user else "default"
@@ -134,7 +130,6 @@ async def get_media_preference(user_id: int) -> str:
 async def add_authorise_user(client: Client, message: Message):
     ids = message.text.removeprefix("/addautho_user").strip().split()
     check = True
-
     try:
         if ids:
             for id_str in ids:
@@ -147,7 +142,6 @@ async def add_authorise_user(client: Client, message: Message):
             check = False
     except ValueError:
         check = False
-
     if check:
         await message.reply_text(
             f'<b>Authorised Users Added ✅</b>\n<blockquote>{" ".join(ids)}</blockquote>',
@@ -164,7 +158,6 @@ async def add_authorise_user(client: Client, message: Message):
 async def delete_authorise_user(client: Client, message: Message):
     ids = message.text.removeprefix("/delautho_user").strip().split()
     check = True
-
     try:
         if ids:
             for id_str in ids:
@@ -177,7 +170,6 @@ async def delete_authorise_user(client: Client, message: Message):
             check = False
     except ValueError:
         check = False
-
     if check:
         await message.reply_text(
             f'<b>Deleted Authorised Users 🆑</b>\n<blockquote>{" ".join(ids)}</blockquote>',
@@ -246,14 +238,21 @@ async def handle_zip_file(client: Client, message: Message):
         )
         return
 
-    # Prompt for new PDF name
+    file_size_mb = document.file_size / (1024 * 1024)
+    if file_size_mb > 20:
+        logger.error(f"File {document.file_name} size {file_size_mb:.2f} MB exceeds 20 MB limit")
+        await message.reply_text(
+            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB. Please send a smaller ZIP or use a local Bot API server.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     logger.info(f"Prompting user {user_id} for new PDF name")
     prompt_message = await message.reply_text(
         "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
         parse_mode=ParseMode.HTML
     )
 
-    # Store context in MongoDB
     if user_settings_collection is not None:
         try:
             await user_settings_collection.update_one(
@@ -264,7 +263,8 @@ async def handle_zip_file(client: Client, message: Message):
                         "chat_id": message.chat.id,
                         "document": {
                             "file_id": document.file_id,
-                            "file_name": document.file_name
+                            "file_name": document.file_name,
+                            "file_size": document.file_size
                         }
                     }
                 }},
@@ -301,7 +301,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             )
             return
 
-        # Check if the reply is to a message asking for a PDF name
         if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
             logger.warning(f"Reply not to PDF name prompt for user {user_id}")
             await message.reply_text(
@@ -310,7 +309,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             )
             return
 
-        # Get the new PDF name
         new_pdf_name = sanitize_filename(message.text)
         if not new_pdf_name:
             logger.error(f"Invalid PDF name provided by user {user_id}")
@@ -320,7 +318,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
             )
             return
 
-        # Retrieve conversion context from MongoDB
         if user_settings_collection is None:
             logger.error(f"MongoDB not available for user {user_id}")
             await message.reply_text(
@@ -339,7 +336,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 )
                 return
             conversion_data = user_data["pending_pdf_conversion"]
-            # Clear pending conversion from MongoDB
             await user_settings_collection.update_one(
                 {"user_id": user_id},
                 {"$unset": {"pending_pdf_conversion": ""}}
@@ -357,71 +353,76 @@ async def handle_pdf_name_reply(client: Client, message: Message):
         chat_id = conversion_data["chat_id"]
         document_file_id = conversion_data["document"]["file_id"]
         original_file_name = conversion_data["document"]["file_name"]
+        file_size = conversion_data["document"].get("file_size", 0)
+        file_size_mb = file_size / (1024 * 1024)
 
-        # Validate file_id
         if not document_file_id:
             logger.error(f"Invalid file_id for user {user_id}")
             await message.reply_text(
                 "<b>❌ Invalid file ID. Please send the ZIP file again.</b>",
                 parse_mode=ParseMode.HTML
             )
-            return
+               return
 
-        # Start processing
         progress_message = await message.reply_text(
             "<b>📂 Processing your ZIP file...</b>",
             parse_mode=ParseMode.HTML
         )
         logger.info(f"Started processing ZIP for user {user_id}, new name: {new_pdf_name}")
 
-        # Use temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             zip_path = os.path.join(temp_dir, original_file_name)
-            debug_zip_path = f"/tmp/{user_id}_{original_file_name}"  # Save for debugging
+            debug_zip_path = f"/tmp/{user_id}_{original_file_name}"
             extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
             pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
 
-            # Download ZIP file with progress
             async def download_progress(current, total):
                 await update_progress_bar(progress_message, current, total, "Downloading ZIP")
 
-            try:
-                logger.info(f"Attempting to download file_id {document_file_id} for user {user_id}")
-                # Fetch the original message using message_id and chat_id
-                original_message = await client.get_messages(chat_id=chat_id, message_ids=message_id)
-                if not original_message or not original_message.document:
-                    logger.error(f"Failed to fetch original message for user {user_id}, message_id {message_id}")
-                    await progress_message.edit_text(
-                        "<b>❌ Failed to access the ZIP file. Please send it again.</b>",
-                        parse_mode=ParseMode.HTML
+            for attempt in range(1, 4):
+                try:
+                    logger.info(f"Attempt {attempt}: Downloading file_id {document_file_id} for user {user_id}")
+                    original_message = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+                    if not original_message or not original_message.document:
+                        logger.error(f"Failed to fetch original message for user {user_id}, message_id {message_id}")
+                        await progress_message.edit_text(
+                            "<b>❌ Failed to access the ZIP file. Please send it again.</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    if original_message.document.file_size / (1024 * 1024) > 20:
+                        logger.error(f"File size {file_size_mb:.2f} MB exceeds 20 MB limit")
+                        await progress_message.edit_text(
+                            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB.</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    await client.download_media(
+                        message=original_message,
+                        file_name=zip_path,
+                        progress=download_progress
                     )
-                    return
+                    shutil.copy(zip_path, debug_zip_path)
+                    downloaded_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+                    logger.info(f"Downloaded ZIP for user {user_id}, size: {downloaded_size} bytes, saved to {debug_zip_path}")
+                    if downloaded_size == 0:
+                        logger.error(f"Empty file downloaded for user {user_id}")
+                        await progress_message.edit_text(
+                            "<b>❌ Downloaded file is empty. Please send a valid ZIP file.</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    break
+                except Exception as e:
+                    logger.error(f"Download attempt {attempt} failed for user {user_id}: {e}")
+                    if attempt == 3:
+                        await progress_message.edit_text(
+                            f"<b>❌ Error downloading file after 3 attempts: {str(e)}</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    await asyncio.sleep(2)
 
-                await client.download_media(
-                    message=original_message,
-                    file_name=zip_path,
-                    progress=download_progress
-                )
-                # Save a copy for debugging
-                shutil.copy(zip_path, debug_zip_path)
-                # Log file size
-                file_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
-                logger.info(f"Downloaded ZIP for user {user_id}, size: {file_size} bytes, saved to {debug_zip_path}")
-                if file_size == 0:
-                    await progress_message.edit_text(
-                        "<b>❌ Downloaded file is empty. Please send a valid ZIP file.</b>",
-                        parse_mode=ParseMode.HTML
-                    )
-                    return
-            except Exception as e:
-                logger.error(f"Download error for user {user_id}: {e}")
-                await progress_message.edit_text(
-                    f"<b>❌ Error downloading file: {str(e)}</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-
-            # Extract ZIP file with progress
             try:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     file_list = zip_ref.namelist()
@@ -433,9 +434,28 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                             parse_mode=ParseMode.HTML
                         )
                         return
+                    if total_files > MAX_FILES:
+                        logger.error(f"ZIP contains {total_files} files, exceeds limit of {MAX_FILES}")
+                        await progress_message.edit_text(
+                            f"<b>❌ ZIP contains too many files ({total_files}). Max allowed: {MAX_FILES}.</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    total_extracted_size = sum(zip_ref.getinfo(f).file_size for f in file_list)
+                    if total_extracted_size > MAX_EXTRACTED_SIZE:
+                        logger.error(f"ZIP extracted size {total_extracted_size} bytes exceeds limit of {MAX_EXTRACTED_SIZE}")
+                        await progress_message.edit_text(
+                            f"<b>❌ ZIP extracted size ({total_extracted_size / (1024 * 1024):.2f} MB) exceeds limit ({MAX_EXTRACTED_SIZE / (1024 * 1024):.2f} MB).</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        return
+                    extracted_files = []
                     for i, file in enumerate(file_list, 1):
                         zip_ref.extract(file, extract_folder)
-                        await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
+                        extracted_files.append(os.path.join(extract_folder, file))
+                        if i % 10 == 0 or i == total_files:  # Update every 10 files or at the end
+                            await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
+                            await asyncio.sleep(0.1)  # Rate limit
                 logger.info(f"Extracted ZIP for user {user_id}")
             except zipfile.BadZipFile as e:
                 logger.error(f"Invalid ZIP file for user {user_id}: {e}")
@@ -445,13 +465,10 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 )
                 return
 
-            # Supported image formats
             valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
-
-            # Get image files, sorted naturally
             image_files = natural_sort([
-                os.path.join(extract_folder, f) for f in os.listdir(extract_folder)
-                if f.lower().endswith(valid_extensions)
+                f for f in extracted_files
+                if os.path.splitext(f)[1].lower() in valid_extensions
             ])
 
             if not image_files:
@@ -462,7 +479,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 )
                 return
 
-            # Convert images to PDF with progress
             async def pdf_progress(current, total):
                 await update_progress_bar(progress_message, current, total, "Converting to PDF")
 
@@ -477,7 +493,6 @@ async def handle_pdf_name_reply(client: Client, message: Message):
                 )
                 return
 
-            # Upload PDF
             try:
                 await client.send_document(
                     chat_id=chat_id,
@@ -517,7 +532,6 @@ async def pdf_handler(client: Client, message: Message):
         )
         return
 
-    # Reply and wait for the ZIP file in the same chat
     await message.reply_text(
         "<b>📂 Please send a ZIP file containing images. Reply to this message with the ZIP file.</b>",
         parse_mode=ParseMode.HTML
@@ -535,7 +549,6 @@ async def handle_zip_reply(client: Client, message: Message):
         )
         return
 
-    # Check if the reply is to a message asking for a ZIP file
     if not message.reply_to_message or "Please send a ZIP file" not in message.reply_to_message.text:
         return
 
@@ -544,14 +557,21 @@ async def handle_zip_reply(client: Client, message: Message):
         await message.reply_text("<b>❌ Please send a valid ZIP file.</b>", parse_mode=ParseMode.HTML)
         return
 
-    # Prompt for new PDF name
+    file_size_mb = document.file_size / (1024 * 1024)
+    if file_size_mb > 20:
+        logger.error(f"File {document.file_name} size {file_size_mb:.2f} MB exceeds 20 MB limit")
+        await message.reply_text(
+            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB. Please send a smaller ZIP or use a local Bot API server.</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     logger.info(f"Prompting user {user_id} for new PDF name")
     prompt_message = await message.reply_text(
         "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
         parse_mode=ParseMode.HTML
     )
 
-    # Store context in MongoDB
     if user_settings_collection is not None:
         try:
             await user_settings_collection.update_one(
@@ -562,7 +582,8 @@ async def handle_zip_reply(client: Client, message: Message):
                         "chat_id": message.chat.id,
                         "document": {
                             "file_id": document.file_id,
-                            "file_name": document.file_name
+                            "file_name": document.file_name,
+                            "file_size": document.file_size
                         }
                     }
                 }},
