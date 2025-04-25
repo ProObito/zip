@@ -1,4 +1,4 @@
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
+
 import os
 import zipfile
 import tempfile
@@ -7,7 +7,7 @@ import shutil
 from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config
+from config import SUPPORT_CHAT
 from helper.database import is_autho_user_exist, get_thumbnail, get_banner_status, get_banner_image, get_banner_url, get_banner_position
 from helper.utils import natural_sort, remove_duplicates, create_banner_pdf, add_banner_to_pdf
 
@@ -46,7 +46,7 @@ async def handle_zip_file(client: Client, message):
     if not check:
         await message.reply_text(
             f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+            f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
             parse_mode="html"
         )
         return
@@ -441,11 +441,11 @@ async def remove_page_callback(client: Client, callback_query):
     except Exception as e:
         await callback_query.message.edit_text(f"❌ Error removing page: {e}")
 
-def register_handlers(app: Client):
-    app.on_message(filters.private & filters.document & filters.regex(r"\.zip$"))(handle_zip_file)
-    app.on_callback_query(filters.regex(r"zip_to_pdf_\d+"))(zip_to_pdf_callback)
-    app.on_callback_query(filters.regex(r"zip_to_cbz_\d+"))(zip_to_cbz_callback)
-    app.on_callback_query(filters.regex(r"unzip_\d+"))(unzip_callback)
-    app.on_callback_query(filters.regex(r"merge_zip_\d+"))(merge_zip_callback)
-    app.on_callback_query(filters.regex(r"rename_zip_\d+"))(rename_zip_callback)
-    app.on_callback_query(filters.regex(r"remove_page_\d+"))(remove_page_callback)
+def register_handlers(client: Client):
+    client.on_message(filters.private & filters.document & filters.regex(r"\.zip$"))(handle_zip_file)
+    client.on_callback_query(filters.regex(r"zip_to_pdf_\d+"))(zip_to_pdf_callback)
+    client.on_callback_query(filters.regex(r"zip_to_cbz_\d+"))(zip_to_cbz_callback)
+    client.on_callback_query(filters.regex(r"unzip_\d+"))(unzip_callback)
+    client.on_callback_query(filters.regex(r"merge_zip_\d+"))(merge_zip_callback)
+    client.on_callback_query(filters.regex(r"rename_zip_\d+"))(rename_zip_callback)
+    client.on_callback_query(filters.regex(r"remove_page_\d+"))(remove_page_callback)
