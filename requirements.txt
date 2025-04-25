@@ -14,3 +14,4 @@ pillow==10.2.0
 PyPDF2==3.0.1        # For PDF manipulation
 reportlab==4.0.9      # For creating PDF banner pages
 ebooklib==0.18       # For EPUB handling
+img2pdf # For image to pdf
