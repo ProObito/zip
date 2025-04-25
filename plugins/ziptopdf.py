@@ -8,8 +8,6 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from PIL import Image, ImageDraw, ImageFont
-import PyPDF2
-import img2pdf
 from config import Config
 
 # Set up logging
@@ -22,7 +20,7 @@ app = Client(
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
-    workers=4  # Adjust for Heroku
+    workers=4
 )
 
 # Store user data (banner settings, temp files, etc.)
@@ -39,7 +37,7 @@ DEFAULT_BANNER = {
 # Create default banner image with settings
 def create_banner_image(user_id):
     logger.debug(f"Creating banner image for user {user_id}")
-    img = Image.new("RGB", (595, 842), color="white")  # A4 size at 72 DPI
+    img = Image.new("RGB", (595, 842), color="white")
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("arial.ttf", 20)
@@ -110,8 +108,16 @@ async def check_subscription(client, user_id):
     logger.debug(f"User {user_id} is subscribed to both channels")
     return True
 
+# Fallback handler for all messages
+@Client.on_message(filters.private)
+async def debug_all_messages(client, message):
+    user_id = message.from_user.id
+    logger.debug(f"Received message from user {user_id}: {message}")
+    if message.document:
+        logger.debug(f"Document details: name={message.document.file_name}, mime={message.document.mime_type}, ext={os.path.splitext(message.document.file_name)[1].lower()}")
+
 # Handle /start command
-@app.on_message(filters.command("start") & filters.private)
+@Client.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent /start")
@@ -135,7 +141,7 @@ async def start_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} started the bot.")
 
 # Handle /banner command (admin-only)
-@app.on_message(filters.command("banner") & filters.private)
+@Client.on_message(filters.command("banner") & filters.private)
 async def banner_command(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent /banner")
@@ -174,7 +180,7 @@ async def banner_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} accessed /banner.")
 
 # Handle inline button callbacks
-@app.on_callback_query()
+@Client.on_callback_query()
 async def button_callback(client, query):
     user_id = query.from_user.id
     data = query.data
@@ -312,7 +318,7 @@ def get_main_menu():
     )
 
 # Handle text input (e.g., URL, rename)
-@app.on_message(filters.text & filters.private)
+@Client.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent text: {message.text}")
@@ -341,7 +347,7 @@ async def handle_text(client, message):
             user_data[user_id]["zip_path"] = None
 
 # Handle file uploads (PDF, ZIP, images, etc.)
-@app.on_message(filters.document & filters.private)
+@Client.on_message(filters.document & filters.private)
 async def handle_document(client, message):
     user_id = message.from_user.id
     document = message.document
@@ -349,12 +355,6 @@ async def handle_document(client, message):
     file_ext = os.path.splitext(file_name)[1].lower()
     mime_type = document.mime_type
     logger.debug(f"User {user_id} uploaded document: {file_name}, MIME: {mime_type}, Ext: {file_ext}")
-
-    # Check if it's a ZIP file by extension or MIME type
-    if file_ext != ".zip" and mime_type != "application/zip":
-        logger.debug(f"File {file_name} is not a ZIP file, checking other conditions")
-    else:
-        logger.debug(f"Processing potential ZIP file: {file_name}")
 
     try:
         if not await check_subscription(client, user_id):
@@ -408,7 +408,7 @@ async def handle_document(client, message):
             return
 
         # Handle ZIP file
-        if file_ext == ".zip" or mime_type == "application/zip":
+        if file_ext == ".zip" or mime_type in ["application/zip", "application/x-zip-compressed"]:
             logger.debug(f"Handling ZIP file for user {user_id}")
             if user_data[user_id].get("awaiting") == "merge_zip":
                 second_zip = f"second_{user_id}.zip"
@@ -488,6 +488,7 @@ async def handle_document(client, message):
                 await message.reply("Error processing file. Try again.")
                 if os.path.exists(input_path):
                     os.remove(input_path)
+
     except Exception as e:
         logger.error(f"Unexpected error in handle_document for user {user_id}: {e}")
         await message.reply("An unexpected error occurred. Please try again.")
@@ -497,6 +498,8 @@ async def main():
     try:
         await app.start()
         logger.info("Bot started successfully")
+        me = await app.get_me()
+        logger.info(f"Bot is running as @{me.username} (ID: {me.id})")
         await app.idle()
     except Exception as e:
         logger.error(f"Error starting bot: {e}")
@@ -506,6 +509,6 @@ async def main():
         logger.info("Bot stopped")
 
 if __name__ == "__main__":
-    # Disable webhook to ensure polling
     Config.WEBHOOK = False
+    logger.info(f"Webhook setting: {Config.WEBHOOK}")
     asyncio.run(main())
