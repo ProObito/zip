@@ -6,14 +6,14 @@ import shutil
 from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config, ADMIN, SUPPORT_CHAT
-from helper.database import (
+from config import Config
+from database import (
     is_autho_user_exist, add_autho_user, remove_autho_user, get_all_autho_users,
     set_thumbnail, get_thumbnail, delete_thumbnail,
     set_banner_status, get_banner_status, set_banner_position, get_banner_position,
     set_banner_url, get_banner_url, set_banner_image, get_banner_image, delete_banner_image
 )
-from helper.utils import create_banner_pdf, add_banner_to_pdf, add_banner_to_epub
+from utils import create_banner_pdf, add_banner_to_pdf, add_banner_to_epub
 
 async def show_banner_settings(client: Client, message: Message, user_id: int):
     banner_status = await get_banner_status(user_id)
@@ -53,11 +53,11 @@ def register_handlers(client: Client):
     @client.on_message(filters.private & filters.command("banner"))
     async def banner_settings_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in admin
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -191,7 +191,7 @@ def register_handlers(client: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer()
 
-    @client.on_message(filters.private & filters.command("addautho_user") & filters.user(admin))
+    @client.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN))
     async def add_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/addautho_user").strip().split()
         check = True
@@ -219,7 +219,7 @@ def register_handlers(client: Client):
                 parse_mode="html"
             )
 
-    @client.on_message(filters.private & filters.command("delautho_user") & filters.user(admin))
+    @client.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN))
     async def delete_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/delautho_user").strip().split()
         check = True
@@ -247,7 +247,7 @@ def register_handlers(client: Client):
                 parse_mode="html"
             )
 
-    @client.on_message(filters.private & filters.command("autho_users") & filters.user(admin))
+    @client.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN))
     async def authorise_user_list(client: Client, message: Message):
         autho_users = await get_all_autho_users()
         if autho_users:
@@ -273,18 +273,18 @@ def register_handlers(client: Client):
             await message.reply_text(
                 f"**Nope, You are not an Authorised user 🔴**\n"
                 f"<blockquote>You can't send files or set thumbnails/banners.</blockquote>\n"
-                f"**Contact {SUPPORT_CHAT} to get authorized.**",
+                f"**Contact {Config.SUPPORT_CHAT} to get authorized.**",
                 parse_mode="html"
             )
 
     @client.on_message(filters.private & filters.command("set_thumb"))
     async def set_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in admin
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to set a thumbnail ⚠️</b>\n"
-                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -317,11 +317,11 @@ def register_handlers(client: Client):
     @client.on_message(filters.private & filters.command("see_thumb"))
     async def see_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in admin
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to view thumbnails ⚠️</b>\n"
-                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -341,11 +341,11 @@ def register_handlers(client: Client):
     @client.on_message(filters.private & filters.command("del_thumb"))
     async def delete_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in admin
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to delete thumbnails ⚠️</b>\n"
-                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -368,7 +368,7 @@ def register_handlers(client: Client):
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -443,4 +443,4 @@ def register_handlers(client: Client):
     @client.on_callback_query(filters.regex("close"))
     async def handle_close_callback(client: Client, callback_query):
         await callback_query.message.delete()
-        await callback_query.answer("🍌 Message closed.")
+        await callback_query.answer("Message closed.")
