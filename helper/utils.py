@@ -1,95 +1,87 @@
-import math, time
-from datetime import datetime
-from pytz import timezone
-from config import Config, Txt 
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
+import re
+import os
+import zipfile
+import shutil
+from PIL import Image
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from PyPDF2 import PdfReader, PdfWriter
+import ebooklib
+from ebooklib import epub
 
-def convert_time(seconds):
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+def natural_sort(file_list):
+    return sorted(file_list, key=lambda f: [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', f)])
 
-async def progress_for_pyrogram(current, total, ud_type, message, start):
-    now = time.time()
-    diff = now - start
-    if round(diff % 5.00) == 0 or current == total:
-        percentage = current * 100 / total
-        speed = current / diff
-        elapsed_time = round(diff) * 1000
-        time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
+def remove_duplicates(file_list):
+    base_map = {}
+    valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
+    for file in file_list:
+        name, ext = os.path.splitext(os.path.basename(file))
+        if ext.lower() not in valid_extensions:
+            continue
+        match = re.match(r"^(\d+)[a-zA-Z]?$", name)
+        if match:
+            base = match.group(1)
+            if base not in base_map or not name.endswith("t"):
+                base_map[base] = file
+    return list(base_map.values())
 
-        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-        time_left = (total - current) / speed
-        elapsed_minutes = int(diff / 60)  # Calculate elapsed minutes
-        elapsed_seconds = int(diff % 60)  # Calculate elapsed seconds
+def create_banner_pdf(banner_image_path: str, url: str = None) -> str:
+    temp_dir = tempfile.mkdtemp()
+    output_path = os.path.join(temp_dir, "banner.pdf")
+    c = canvas.Canvas(output_path, pagesize=letter)
+    if banner_image_path and os.path.exists(banner_image_path):
+        img = Image.open(banner_image_path)
+        img_width, img_height = img.size
+        aspect = img_height / float(img_width)
+        target_width = letter[0] - 40
+        target_height = target_width * aspect
+        c.drawImage(banner_image_path, 20, letter[1] - target_height - 20, target_width, target_height)
+    if url:
+        c.linkAbsolute("", url, (20, letter[1] - target_height - 20, 20 + target_width, letter[1] - 20))
+    c.showPage()
+    c.save()
+    return output_path
 
-        num_boxes = 10
-        completed_boxes = int(percentage / (100 / num_boxes))
-        remaining_boxes = num_boxes - completed_boxes
+def add_banner_to_pdf(input_pdf: str, output_pdf: str, banner_pdf: str, position: str):
+    reader = PdfReader(input_pdf)
+    banner_reader = PdfReader(banner_pdf)
+    writer = PdfWriter()
+    if position in ["first", "both"]:
+        writer.add_page(banner_reader.pages[0])
+    for page in reader.pages:
+        writer.add_page(page)
+    if position in ["last", "both"]:
+        writer.add_page(banner_reader.pages[0])
+    with open(output_pdf, "wb") as f:
+        writer.write(f)
 
-        progress = "■" * completed_boxes + "□" * remaining_boxes
+def remove_page_from_pdf(input_pdf: str, output_pdf: str, page_number: int):
+    reader = PdfReader(input_pdf)
+    writer = PdfWriter()
+    if 0 <= page_number < len(reader.pages):
+        for i, page in enumerate(reader.pages):
+            if i != page_number:
+                writer.add_page(page)
+    with open(output_pdf, "wb") as f:
+        writer.write(f)
 
-        text = f"Progress: [{progress}] {percentage:.1f}%\n"
-        if ud_type == "Uᴩʟᴏᴀᴅ Sᴛᴀʀᴛᴇᴅ....":
-            text += f"📤 Uploading: {humanbytes(current)} | {humanbytes(total)}\n"
-        else:
-            text += f"📥 Downloading: {humanbytes(current)} | {humanbytes(total)}\n"
-        text += f"⚡️ Speed: {humanbytes(speed)}/s\n"
-        text += f"⌛ ETA: {convert_time(time_left)}\n"
-        text += f"⏱️ Time elapsed: {elapsed_minutes}m {elapsed_seconds}s"
-        try:
-            await message.edit(
-                text=text,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ 𝙲𝙰𝙽𝙲𝙴𝙻 ✖️", callback_data="close")]])
-            )
-        except:
-            pass
-
-
-def humanbytes(size):    
-    if not size:
-        return ""
-    power = 2**10
-    n = 0
-    Dic_powerN = {0: ' ', 1: 'K', 2: 'M', 3: 'G', 4: 'T'}
-    while size > power:
-        size /= power
-        n += 1
-    return str(round(size, 2)) + " " + Dic_powerN[n] + 'ʙ'
-
-
-def TimeFormatter(milliseconds: int) -> str:
-    seconds, milliseconds = divmod(int(milliseconds), 1000)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-    tmp = ((str(days) + "ᴅ, ") if days else "") + \
-        ((str(hours) + "ʜ, ") if hours else "") + \
-        ((str(minutes) + "ᴍ, ") if minutes else "") + \
-        ((str(seconds) + "ꜱ, ") if seconds else "") + \
-        ((str(milliseconds) + "ᴍꜱ, ") if milliseconds else "")
-    return tmp[:-2] 
-
-def convert(seconds):
-    seconds = seconds % (24 * 3600)
-    hour = seconds // 3600
-    seconds %= 3600
-    minutes = seconds // 60
-    seconds %= 60      
-    return "%d:%02d:%02d" % (hour, minutes, seconds)
-
-async def send_log(b, u):
-    if Config.LOG_CHANNEL is not None:
-        curr = datetime.now(timezone("Asia/Kolkata"))
-        date = curr.strftime('%d %B, %Y')
-        time = curr.strftime('%I:%M:%S %p')
-        await b.send_message(
-            Config.LOG_CHANNEL,
-            f"**--Nᴇᴡ Uꜱᴇʀ Sᴛᴀʀᴛᴇᴅ Tʜᴇ Bᴏᴛ--**\n\nUꜱᴇʀ: {u.mention}\nIᴅ: `{u.id}`\nUɴ: @{u.username}\n\nDᴀᴛᴇ: {date}\nTɪᴍᴇ: {time}\n\nBy: {b.mention}"
-        )
-        
-
-
-
+def add_banner_to_epub(input_epub: str, output_epub: str, banner_image_path: str, position: str):
+    book = epub.read_epub(input_epub)
+    banner_item = epub.EpubImage()
+    with open(banner_image_path, "rb") as f:
+        banner_item.content = f.read()
+    banner_item.file_name = "banner.jpg"
+    banner_item.id = "banner"
+    book.add_item(banner_item)
+    banner_html = epub.EpubHtml(title="Banner", file_name="banner.xhtml")
+    banner_html.content = f'<img src="banner.jpg" alt="Banner" style="width:100%;"/>'.encode()
+    book.add_item(banner_html)
+    if position in ["first", "both"]:
+        book.spine.insert(0, banner_html)
+        book.toc.insert(0, banner_html)
+    if position in ["last", "both"]:
+        book.spine.append(banner_html)
+        book.toc.append(banner_html)
+    epub.write_epub(output_epub, book)
