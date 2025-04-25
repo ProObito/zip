@@ -96,7 +96,7 @@ async def check_subscription(client, user_id):
     return True
 
 # Handle /start command
-@app.on_message(filters.command("start") & filters.private)
+@Client.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user_id = message.from_user.id
     if not await check_subscription(client, user_id):
@@ -119,7 +119,7 @@ async def start_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} started the bot.")
 
 # Handle /banner command (admin-only)
-@app.on_message(filters.command("banner") & filters.private)
+@Client.on_message(filters.command("banner") & filters.private)
 async def banner_command(client, message):
     user_id = message.from_user.id
     if user_id not in Config.ADMIN:
@@ -148,7 +148,7 @@ async def banner_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} accessed /banner.")
 
 # Handle inline button callbacks
-@app.on_callback_query()
+@Client.on_callback_query()
 async def button_callback(client, query):
     user_id = query.from_user.id
     data = query.data
@@ -269,7 +269,7 @@ def get_main_menu():
     )
 
 # Handle text input (e.g., URL)
-@app.on_message(filters.text & filters.private)
+@Client.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     if user_id in user_data and user_data[user_id].get("awaiting") == "url":
@@ -280,7 +280,7 @@ async def handle_text(client, message):
         await client.send_message(Config.LOG_CHANNEL, f"User {user_id} set banner URL to {url}.")
 
 # Handle file uploads (PDF, ZIP, images, etc.)
-@app.on_message(filters.document & filters.private)
+@Client.on_message(filters.document & filters.private)
 async def handle_document(client, message):
     user_id = message.from_user.id
     if not await check_subscription(client, user_id):
