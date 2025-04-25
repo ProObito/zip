@@ -3,7 +3,7 @@ import random
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, CallbackQuery
 from helper.database import add_autho_user, is_autho_user_exist
-from config import Config, txt
+from config import Config, Txt
 
 async def check_subscription(client: Client, user_id: int, channel: str) -> bool:
     """Check if a user is subscribed to a channel."""
