@@ -6,7 +6,7 @@ import shutil
 from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config SUPPORT_CHAT
+from config import Config
 from database import (
     is_autho_user_exist, add_autho_user, remove_autho_user, get_all_autho_users,
     set_thumbnail, get_thumbnail, delete_thumbnail,
