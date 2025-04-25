@@ -1,605 +1,383 @@
-import re
 import os
+import re
+import time
 import zipfile
-import tempfile
-import asyncio
-import shutil
-from PIL import Image
+import io
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from pyrogram.enums import ParseMode
-import motor.motor_asyncio
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from PIL import Image, ImageDraw, ImageFont
+import PyPDF2
+import img2pdf
 from config import Config
-import logging
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize Pyrogram client
+app = Client(
+    "BannerBot",
+    api_id=Config.API_ID,
+    api_hash=Config.API_HASH,
+    bot_token=Config.BOT_TOKEN
+)
 
-# MongoDB Setup
-try:
-    mongo_client = motor.motor_asyncio.AsyncIOMotorClient(Config.DB_URL)
-    db = mongo_client[Config.DB_NAME]
-    autho_users_collection = db["authorized_users"]
-    user_settings_collection = db["user_settings"]
-    logger.info("MongoDB connected successfully")
-except Exception as e:
-    logger.error(f"MongoDB connection failed: {e}")
-    autho_users_collection = None
-    user_settings_collection = None
+# Store user data (banner settings, temp files, etc.)
+user_data = {}
 
-# Ensure SUPPORT_CHAT
-if not hasattr(Config, 'SUPPORT_CHAT'):
-    Config.SUPPORT_CHAT = "@YourSupportChat"
+# Default banner settings
+DEFAULT_BANNER = {
+    "status": False,
+    "position": "first",
+    "click_url": None,
+    "image_path": None,
+}
 
-# Constants
-MAX_FILES = 100  # Max files in ZIP
-MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 100 MB max extracted size
-
-# Utility Functions
-def natural_sort(file_list):
-    return sorted(file_list, key=lambda f: [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', f)])
-
-def remove_duplicates(file_list):
-    base_map = {}
-    valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
-    for file in file_list:
-        name, ext = os.path.splitext(os.path.basename(file))
-        if ext.lower() not in valid_extensions:
-            continue
-        match = re.match(r"^(\d+)[a-zA-Z]?$", name)
-        if match:
-            base = match.group(1)
-            if base not in base_map or not name.endswith("t"):
-                base_map[base] = file
-    return list(base_map.values())
-
-def sanitize_filename(name: str) -> str:
-    return re.sub(r'[^\w\-_\. ]', '', name).strip()
-
-def generate_pdf(image_files, output_path, progress_callback=None):
-    total = len(image_files)
-    image_iter = (Image.open(f).convert("RGB") for f in image_files)
-    first = next(image_iter)
-    images = [first]
-    for i, img in enumerate(image_iter, 1):
-        images.append(img)
-        if progress_callback:
-            progress_callback(i, total)
-    first.save(output_path, save_all=True, append_images=images[1:])
-
-# Progress Bar
-async def update_progress_bar(message: Message, current: int, total: int, stage: str):
-    if total == 0:
-        text = f"<b>{stage}: [          ] 0% (empty file)</b>"
-    else:
-        percentage = int((current / total) * 100)
-        bar_length = 10
-        filled = int(bar_length * current / total)
-        bar = "█" * filled + " " * (bar_length - filled)
-        text = f"<b>{stage}: [{bar}] {percentage}%</b>"
+# Create default banner image with settings
+def create_banner_image(user_id):
+    img = Image.new("RGB", (595, 842), color="white")  # A4 size at 72 DPI
+    draw = ImageDraw.Draw(img)
     try:
-        await message.edit_text(text, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        if "MESSAGE_NOT_MODIFIED" in str(e):
-            pass  # Ignore duplicate updates
-        else:
-            logger.error(f"Failed to update progress bar: {e}")
+        font = ImageFont.truetype("arial.ttf", 20)
+    except:
+        font = ImageFont.load_default()
 
-# MongoDB Helpers
-async def add_autho_user(user_id: int):
-    if autho_users_collection is not None:
-        await autho_users_collection.update_one(
-            {"user_id": user_id},
-            {"$set": {"user_id": user_id}},
-            upsert=True
-        )
+    text = f"""
+📄 PDF Banner Settings
+▫️ Banner Status: {'✅ Enabled' if user_data.get(user_id, {}).get('banner', DEFAULT_BANNER)['status'] else '❌ Disabled'}
+▫️ Current Position: {user_data.get(user_id, {}).get('banner', DEFAULT_BANNER)['position']}
+▫️ Click URL: {user_data.get(user_id, {}).get('banner', DEFAULT_BANNER)['click_url'] or 'None'}
 
-async def remove_autho_user(user_id: int):
-    if autho_users_collection is not None:
-        await autho_users_collection.delete_one({"user_id": user_id})
+Configure your PDF banners:
+1. Turn banner on/off
+2. Set banner position
+3. Add clickable URL
+4. Upload banner image
+"""
+    draw.text((50, 50), text, fill="black", font=font)
+    banner_path = f"banner_{user_id}.png"
+    img.save(banner_path)
+    return banner_path
 
-async def is_autho_user_exist(user_id: int) -> bool:
-    if autho_users_collection is not None:
-        user = await autho_users_collection.find_one({"user_id": user_id})
-        return bool(user)
-    return False
+# Add banner to PDF
+def add_banner_to_pdf(input_path, output_path, banner_path, position):
+    banner_pdf = None
+    if banner_path.endswith((".png", ".jpg", ".jpeg")):
+        with open(banner_path, "rb") as img_file:
+            banner_pdf = img2pdf.convert(img_file.read())
+        banner_pdf = io.BytesIO(banner_pdf)
+    elif banner_path.endswith(".pdf"):
+        banner_pdf = open(banner_path, "rb")
 
-async def get_all_autho_users() -> list:
-    if autho_users_collection is not None:
-        users = []
-        async for doc in autho_users_collection.find():
-            users.append(doc["user_id"])
-        return users
-    return []
+    input_pdf = PyPDF2.PdfReader(input_path)
+    output_pdf = PyPDF2.PdfWriter()
 
-async def get_format_template(user_id: int) -> str:
-    if user_settings_collection is not None:
-        user = await user_settings_collection.find_one({"user_id": user_id})
-        return user.get("format_template", "default_format") if user else "default_format"
-    return "default_format"
+    banner_reader = PyPDF2.PdfReader(banner_pdf)
+    banner_page = banner_reader.pages[0]
 
-async def get_media_preference(user_id: int) -> str:
-    if user_settings_collection is not None:
-        user = await user_settings_collection.find_one({"user_id": user_id})
-        return user.get("media_preference", "default") if user else "default"
-    return "default"
+    if position in ["first", "both"]:
+        output_pdf.add_page(banner_page)
+    for page in input_pdf.pages:
+        output_pdf.add_page(page)
+    if position in ["last", "both"]:
+        output_pdf.add_page(banner_page)
 
-# Command Handlers
-@Client.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN))
-async def add_authorise_user(client: Client, message: Message):
-    ids = message.text.removeprefix("/addautho_user").strip().split()
-    check = True
-    try:
-        if ids:
-            for id_str in ids:
-                if len(id_str) == 10 and id_str.isdigit():
-                    await add_autho_user(int(id_str))
-                else:
-                    check = False
-                    break
-        else:
-            check = False
-    except ValueError:
-        check = False
-    if check:
-        await message.reply_text(
-            f'<b>Authorised Users Added ✅</b>\n<blockquote>{" ".join(ids)}</blockquote>',
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await message.reply_text(
-            "<b>INVALID USE OF COMMAND:</b>\n"
-            "<blockquote><b>➪ Check if the command is empty OR the added ID should be correct (10 digit numbers)</b></blockquote>",
-            parse_mode=ParseMode.HTML
-        )
+    with open(output_path, "wb") as f:
+        output_pdf.write(f)
 
-@Client.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN))
-async def delete_authorise_user(client: Client, message: Message):
-    ids = message.text.removeprefix("/delautho_user").strip().split()
-    check = True
-    try:
-        if ids:
-            for id_str in ids:
-                if len(id_str) == 10 and id_str.isdigit():
-                    await remove_autho_user(int(id_str))
-                else:
-                    check = False
-                    break
-        else:
-            check = False
-    except ValueError:
-        check = False
-    if check:
-        await message.reply_text(
-            f'<b>Deleted Authorised Users 🆑</b>\n<blockquote>{" ".join(ids)}</blockquote>',
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await message.reply_text(
-            "<b>INVALID USE OF COMMAND:</b>\n"
-            "<blockquote><b>➪ Check if the command is empty OR the added ID should be correct (10 digit numbers)</b></blockquote>",
-            parse_mode=ParseMode.HTML
-        )
+    if banner_path.endswith(".pdf"):
+        banner_pdf.close()
 
-@Client.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN))
-async def authorise_user_list(client: Client, message: Message):
-    autho_users = await get_all_autho_users()
-    if autho_users:
-        autho_users_str = "\n".join(map(str, autho_users))
-        await message.reply_text(
-            f"<b>🚻 AUTHORIZED USERS: 🌀</b>\n\n<code>{autho_users_str}</code>",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await message.reply_text(
-            "<b>No authorized users found.</b>",
-            parse_mode=ParseMode.HTML
-        )
+# Check if user is subscribed to force-sub channels
+async def check_subscription(client, user_id):
+    for channel in [Config.FORCE_SUB_1, Config.FORCE_SUB_2]:
+        try:
+            member = await client.get_chat_member(channel, user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+        except:
+            return False
+    return True
 
-@Client.on_message(filters.private & filters.command("check_autho"))
-async def check_authorise_user(client: Client, message: Message):
+# Handle /start command
+@app.on_message(filters.command("start") & filters.private)
+async def start_command(client, message):
     user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-    if check:
-        await message.reply_text(
-            "<b>Yes, You are an Authorised user 🟢</b>\n"
-            "<blockquote>You can send files to Convert to PDF.</blockquote>",
-            parse_mode=ParseMode.HTML
+    if not await check_subscription(client, user_id):
+        keyboard = [
+            [InlineKeyboardButton("Join Channel 1", url=f"https://t.me/{Config.FORCE_SUB_1}")],
+            [InlineKeyboardButton("Join Channel 2", url=f"https://t.me/{Config.FORCE_SUB_2}")],
+            [InlineKeyboardButton("Check Subscription", callback_data="check_sub")]
+        ]
+        await message.reply_photo(
+            photo=Config.START_PIC,
+            caption="Please join both channels to use this bot!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    else:
-        await message.reply_text(
-            f"<b>Nope, You are not an Authorised user 🔴</b>\n"
-            f"<blockquote>You can't send files to Convert to PDF.</blockquote>\n"
-            f"<b>Contact {Config.SUPPORT_CHAT} to get authorized.</b>",
-            parse_mode=ParseMode.HTML
-        )
+        return
 
-@Client.on_message(filters.private & filters.document)
-async def handle_zip_file(client: Client, message: Message):
+    await message.reply_photo(
+        photo=Config.START_PIC,
+        caption="Welcome! Use /banner to configure banner settings."
+    )
+    await client.send_message(Config.LOG_CHANNEL, f"User {user_id} started the bot.")
+
+# Handle /banner command (admin-only)
+@app.on_message(filters.command("banner") & filters.private)
+async def banner_command(client, message):
     user_id = message.from_user.id
-    logger.info(f"Received file from user {user_id}")
-    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-    if not check:
-        logger.warning(f"User {user_id} not authorized for file processing")
-        await message.reply_text(
-            f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-            f"<blockquote>If you want to use this bot, please contact: {Config.SUPPORT_CHAT}</blockquote>",
-            parse_mode=ParseMode.HTML
-        )
+    if user_id not in Config.ADMIN:
+        await message.reply("This command is for admins only!")
+        return
+
+    if not await check_subscription(client, user_id):
+        await message.reply("Please join the required channels first! Use /start to check.")
+        return
+
+    if user_id not in user_data:
+        user_data[user_id] = {"banner": DEFAULT_BANNER.copy()}
+
+    keyboard = [
+        [InlineKeyboardButton("Turn Banner On/Off", callback_data="toggle_banner")],
+        [InlineKeyboardButton("Set Banner Position", callback_data="set_position")],
+        [InlineKeyboardButton("Add Clickable URL", callback_data="set_url")],
+        [InlineKeyboardButton("Upload Banner Image", callback_data="upload_banner")],
+        [InlineKeyboardButton("Close", callback_data="close")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await message.reply(
+        "Configure your banner settings:", reply_markup=reply_markup
+    )
+    await client.send_message(Config.LOG_CHANNEL, f"User {user_id} accessed /banner.")
+
+# Handle inline button callbacks
+@app.on_callback_query()
+async def button_callback(client, query):
+    user_id = query.from_user.id
+    data = query.data
+
+    if data == "check_sub":
+        if await check_subscription(client, user_id):
+            await query.message.edit_caption(
+                caption="You're subscribed! Use /banner to configure settings.",
+                reply_markup=None
+            )
+        else:
+            await query.answer("You haven't joined both channels yet!")
+        return
+
+    if user_id not in Config.ADMIN:
+        await query.answer("This action is for admins only!")
+        return
+
+    if user_id not in user_data:
+        user_data[user_id] = {"banner": DEFAULT_BANNER.copy()}
+
+    if data == "toggle_banner":
+        user_data[user_id]["banner"]["status"] = not user_data[user_id]["banner"]["status"]
+        status = "Enabled" if user_data[user_id]["banner"]["status"] else "Disabled"
+        await query.message.reply(f"Banner {status}")
+        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} toggled banner to {status}.")
+
+    elif data == "set_position":
+        keyboard = [
+            [InlineKeyboardButton("First Page", callback_data="pos_first")],
+            [InlineKeyboardButton("Last Page", callback_data="pos_last")],
+            [InlineKeyboardButton("Both", callback_data="pos_both")],
+            [InlineKeyboardButton("Back", callback_data="back")]
+        ]
+        await query.message.edit_reply_markup(InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("pos_"):
+        position = data.split("_")[1]
+        user_data[user_id]["banner"]["position"] = position
+        await query.message.reply(f"Banner position set to: {position}")
+        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} set banner position to {position}.")
+
+    elif data == "set_url":
+        await query.message.reply("Please send the URL for the banner:")
+        user_data[user_id]["awaiting"] = "url"
+
+    elif data == "upload_banner":
+        await query.message.reply("Please upload the banner image (within 60 seconds):")
+        user_data[user_id]["awaiting"] = "banner_image"
+        user_data[user_id]["banner_upload_time"] = time.time()
+
+    elif data == "remove_banner":
+        user_data[user_id]["banner"]["image_path"] = None
+        await query.message.reply("Banner image removed")
+        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} removed banner image.")
+
+    elif data == "change_banner":
+        await query.message.reply("Please upload the new banner image (within 60 seconds):")
+        user_data[user_id]["awaiting"] = "banner_image"
+        user_data[user_id]["banner_upload_time"] = time.time()
+
+    elif data == "back" or data == "close":
+        await query.message.edit_reply_markup(reply_markup=get_main_menu())
+
+    elif data.startswith("zip_to_pdf_"):
+        zip_path = data.split("_", 3)[-1]
+        output_pdf = f"output_{user_id}.pdf"
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            images = [f for f in zip_ref.namelist() if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+            with open(output_pdf, "wb") as f:
+                f.write(img2pdf.convert([zip_ref.read(img) for img in images]))
+        await query.message.reply_document(document=output_pdf, filename="converted.pdf")
+        os.remove(zip_path)
+        os.remove(output_pdf)
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} converted ZIP to PDF.")
+
+    elif data.startswith("zip_to_cbz_"):
+        zip_path = data.split("_", 3)[-1]
+        cbz_path = f"output_{user_id}.cbz"
+        os.rename(zip_path, cbz_path)
+        await query.message.reply_document(document=cbz_path, filename="converted.cbz")
+        os.remove(cbz_path)
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} converted ZIP to CBZ.")
+
+    elif data.startswith("unzip_"):
+        zip_path = data.split("_", 2)[-1]
+        extract_path = f"extracted_{user_id}"
+        os.makedirs(extract_path, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_path)
+        for file in os.listdir(extract_path):
+            await query.message.reply_document(document=os.path.join(extract_path, file), filename=file)
+        os.remove(zip_path)
+        os.system(f"rm -rf {extract_path}")
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} unzipped a file.")
+
+    elif data.startswith("merge_zip_"):
+        await query.message.reply("Please upload another ZIP file to merge:")
+        user_data[user_id]["awaiting"] = "merge_zip"
+        user_data[user_id]["first_zip"] = data.split("_", 3)[-1]
+
+    elif data == "close":
+        await query.message.delete()
+
+# Get main menu keyboard
+def get_main_menu():
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Turn Banner On/Off", callback_data="toggle_banner")],
+            [InlineKeyboardButton("Set Banner Position", callback_data="set_position")],
+            [InlineKeyboardButton("Add Clickable URL", callback_data="set_url")],
+            [InlineKeyboardButton("Upload Banner Image", callback_data="upload_banner")],
+            [InlineKeyboardButton("Close", callback_data="close")]
+        ]
+    )
+
+# Handle text input (e.g., URL)
+@app.on_message(filters.text & filters.private)
+async def handle_text(client, message):
+    user_id = message.from_user.id
+    if user_id in user_data and user_data[user_id].get("awaiting") == "url":
+        url = message.text
+        user_data[user_id]["banner"]["click_url"] = url
+        user_data[user_id]["awaiting"] = None
+        await message.reply(f"URL set to: {url}")
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} set banner URL to {url}.")
+
+# Handle file uploads (PDF, ZIP, images, etc.)
+@app.on_message(filters.document & filters.private)
+async def handle_document(client, message):
+    user_id = message.from_user.id
+    if not await check_subscription(client, user_id):
+        await message.reply("Please join the required channels first! Use /start to check.")
         return
 
     document = message.document
-    if not document or not document.file_name.endswith(".zip"):
-        logger.error(f"File {document.file_name if document else 'None'} is not a ZIP")
-        await message.reply_text(
-            "<b>❌ Please send a valid ZIP file.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+    file_name = document.file_name
+    file_ext = os.path.splitext(file_name)[1].lower()
 
-    file_size_mb = document.file_size / (1024 * 1024)
-    if file_size_mb > 20:
-        logger.error(f"File {document.file_name} size {file_size_mb:.2f} MB exceeds 20 MB limit")
-        await message.reply_text(
-            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB. Please send a smaller ZIP or use a local Bot API server.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+    if user_id not in user_data:
+        user_data[user_id] = {"banner": DEFAULT_BANNER.copy()}
 
-    logger.info(f"Prompting user {user_id} for new PDF name")
-    prompt_message = await message.reply_text(
-        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
-        parse_mode=ParseMode.HTML
-    )
-
-    if user_settings_collection is not None:
-        try:
-            await user_settings_collection.update_one(
-                {"user_id": user_id},
-                {"$set": {
-                    "pending_pdf_conversion": {
-                        "message_id": message.id,
-                        "chat_id": message.chat.id,
-                        "document": {
-                            "file_id": document.file_id,
-                            "file_name": document.file_name,
-                            "file_size": document.file_size
-                        }
-                    }
-                }},
-                upsert=True
-            )
-            logger.info(f"Stored conversion context for user {user_id}")
-        except Exception as e:
-            logger.error(f"MongoDB store error for user {user_id}: {e}")
-            await message.reply_text(
-                "<b>⚠️ Database error, but you can still reply with the PDF name.</b>",
-                parse_mode=ParseMode.HTML
-            )
-    else:
-        logger.error(f"MongoDB not available for user {user_id}")
-        await message.reply_text(
-            "<b>❌ Database unavailable. Please try again later.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-@Client.on_message(filters.private & filters.text & filters.reply)
-async def handle_pdf_name_reply(client: Client, message: Message):
-    user_id = message.from_user.id
-    logger.info(f"Received PDF name reply from user {user_id}")
-
-    try:
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-        if not check:
-            logger.warning(f"User {user_id} not authorized")
-            await message.reply_text(
-                f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        if not message.reply_to_message or "Please reply to this message with the new name for your PDF" not in message.reply_to_message.text:
-            logger.warning(f"Reply not to PDF name prompt for user {user_id}")
-            await message.reply_text(
-                "<b>❌ Please reply to the bot's prompt message asking for the PDF name.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        new_pdf_name = sanitize_filename(message.text)
-        if not new_pdf_name:
-            logger.error(f"Invalid PDF name provided by user {user_id}")
-            await message.reply_text(
-                "<b>❌ Invalid PDF name. Please provide a valid name without special characters.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        if user_settings_collection is None:
-            logger.error(f"MongoDB not available for user {user_id}")
-            await message.reply_text(
-                "<b>❌ Database unavailable. Please try again later.</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-
-        try:
-            user_data = await user_settings_collection.find_one({"user_id": user_id})
-            if not user_data or "pending_pdf_conversion" not in user_data:
-                logger.error(f"No pending PDF conversion found in MongoDB for user {user_id}")
-                await message.reply_text(
-                    "<b>❌ No pending PDF conversion found. Please send the ZIP file again.</b>",
-                    parse_mode=ParseMode.HTML
-                )
+    # Handle banner image upload
+    if user_data[user_id].get("awaiting") == "banner_image":
+        if file_ext in [".png", ".jpg", ".jpeg"]:
+            if time.time() - user_data[user_id].get("banner_upload_time", 0) > 60:
+                await message.reply("Upload timed out. Please try again.")
+                user_data[user_id]["awaiting"] = None
                 return
-            conversion_data = user_data["pending_pdf_conversion"]
-            await user_settings_collection.update_one(
-                {"user_id": user_id},
-                {"$unset": {"pending_pdf_conversion": ""}}
+            banner_path = f"banner_{user_id}{file_ext}"
+            await message.download(file_name=banner_path)
+            user_data[user_id]["banner"]["image_path"] = banner_path
+            user_data[user_id]["awaiting"] = None
+
+            keyboard = [
+                [InlineKeyboardButton("Remove Banner", callback_data="remove_banner")],
+                [InlineKeyboardButton("Change Banner", callback_data="change_banner")],
+                [InlineKeyboardButton("Close", callback_data="close")]
+            ]
+            await message.reply(
+                "Banner image set!", reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            logger.info(f"Cleared conversion context for user {user_id}")
-        except Exception as e:
-            logger.error(f"MongoDB retrieve error for user {user_id}: {e}")
-            await message.reply_text(
-                "<b>❌ Database error. Please send the ZIP file again.</b>",
-                parse_mode=ParseMode.HTML
-            )
+            await client.send_message(Config.LOG_CHANNEL, f"User {user_id} uploaded a banner image.")
+        else:
+            await message.reply("Please upload a PNG or JPG image.")
+        return
+
+    # Handle ZIP file
+    if file_ext == ".zip":
+        if user_data[user_id].get("awaiting") == "merge_zip":
+            second_zip = f"second_{user_id}.zip"
+            await message.download(file_name=second_zip)
+
+            output_zip = f"merged_{user_id}.zip"
+            with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as merged:
+                for zip_path in [user_data[user_id]["first_zip"], second_zip]:
+                    with zipfile.ZipFile(zip_path, "r") as z:
+                        for file in z.namelist():
+                            merged.write(file, z.read(file))
+
+            await message.reply_document(document=output_zip, filename="merged.zip")
+            await client.send_message(Config.LOG_CHANNEL, f"User {user_id} merged two ZIP files.")
+
+            os.remove(user_data[user_id]["first_zip"])
+            os.remove(second_zip)
+            os.remove(output_zip)
+            user_data[user_id]["awaiting"] = None
             return
 
-        message_id = conversion_data["message_id"]
-        chat_id = conversion_data["chat_id"]
-        document_file_id = conversion_data["document"]["file_id"]
-        original_file_name = conversion_data["document"]["file_name"]
-        file_size = conversion_data["document"].get("file_size", 0)
-        file_size_mb = file_size / (1024 * 1024)
+        zip_path = f"input_{user_id}.zip"
+        await message.download(file_name=zip_path)
 
-        if not document_file_id:
-            logger.error(f"Invalid file_id for user {user_id}")
-            await message.reply_text(
-                "<b>❌ Invalid file ID. Please send the ZIP file again.</b>",
-                parse_mode=ParseMode.HTML
-            )
+        keyboard = [
+            [InlineKeyboardButton("Zip to PDF", callback_data=f"zip_to_pdf_{zip_path}")],
+            [InlineKeyboardButton("Zip to CBZ", callback_data=f"zip_to_cbz_{zip_path}")],
+            [InlineKeyboardButton("Unzip", callback_data=f"unzip_{zip_path}")],
+            [InlineKeyboardButton("Merge Zip", callback_data=f"merge_zip_{zip_path}")],
+            [InlineKeyboardButton("Close", callback_data="close")]
+        ]
+        await message.reply(
+            "Choose an action for the ZIP file:", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} uploaded a ZIP file.")
+        return
+
+    # Handle PDF, CBZ, EPUB
+    if file_ext in [".pdf", ".cbz", ".epub"]:
+        if user_id not in Config.ADMIN:
+            await message.reply("File processing is for admins only!")
             return
 
-        progress_message = await message.reply_text(
-            "<b>📂 Processing your ZIP file...</b>",
-            parse_mode=ParseMode.HTML
-        )
-        logger.info(f"Started processing ZIP for user {user_id}, new name: {new_pdf_name}")
+        input_path = f"input_{user_id}{file_ext}"
+        await message.download(file_name=input_path)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            zip_path = os.path.join(temp_dir, original_file_name)
-            debug_zip_path = f"/tmp/{user_id}_{original_file_name}"
-            extract_folder = os.path.join(temp_dir, f"{new_pdf_name}_extracted")
-            pdf_path = os.path.join(temp_dir, f"{new_pdf_name}.pdf")
+        if user_data[user_id]["banner"]["status"]:
+            banner_path = user_data[user_id]["banner"]["image_path"] or create_banner_image(user_id)
+            output_path = f"output_{user_id}{file_ext}"
+            add_banner_to_pdf(input_path, output_path, banner_path, user_data[user_id]["banner"]["position"])
+            await message.reply_document(document=output_path, filename=f"modified_{file_name}")
+            await client.send_message(Config.LOG_CHANNEL, f"User {user_id} processed a {file_ext} file with banner.")
+            os.remove(input_path)
+            os.remove(output_path)
+            if not user_data[user_id]["banner"]["image_path"]:
+                os.remove(banner_path)
+        else:
+            await message.reply("Banner is disabled. Enable it using /banner.")
 
-            async def download_progress(current, total):
-                await update_progress_bar(progress_message, current, total, "Downloading ZIP")
-
-            for attempt in range(1, 4):
-                try:
-                    logger.info(f"Attempt {attempt}: Downloading file_id {document_file_id} for user {user_id}")
-                    original_message = await client.get_messages(chat_id=chat_id, message_ids=message_id)
-                    if not original_message or not original_message.document:
-                        logger.error(f"Failed to fetch original message for user {user_id}, message_id {message_id}")
-                        await progress_message.edit_text(
-                            "<b>❌ Failed to access the ZIP file. Please send it again.</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    if original_message.document.file_size / (1024 * 1024) > 20:
-                        logger.error(f"File size {file_size_mb:.2f} MB exceeds 20 MB limit")
-                        await progress_message.edit_text(
-                            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB.</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    await client.download_media(
-                        message=original_message,
-                        file_name=zip_path,
-                        progress=download_progress
-                    )
-                    shutil.copy(zip_path, debug_zip_path)
-                    downloaded_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
-                    logger.info(f"Downloaded ZIP for user {user_id}, size: {downloaded_size} bytes, saved to {debug_zip_path}")
-                    if downloaded_size == 0:
-                        logger.error(f"Empty file downloaded for user {user_id}")
-                        await progress_message.edit_text(
-                            "<b>❌ Downloaded file is empty. Please send a valid ZIP file.</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    break
-                except Exception as e:
-                    logger.error(f"Download attempt {attempt} failed for user {user_id}: {e}")
-                    if attempt == 3:
-                        await progress_message.edit_text(
-                            f"<b>❌ Error downloading file after 3 attempts: {str(e)}</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    await asyncio.sleep(2)
-
-            try:
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    file_list = zip_ref.namelist()
-                    total_files = len(file_list)
-                    if total_files == 0:
-                        logger.error(f"ZIP file is empty for user {user_id}")
-                        await progress_message.edit_text(
-                            "<b>❌ ZIP file is empty.</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    if total_files > MAX_FILES:
-                        logger.error(f"ZIP contains {total_files} files, exceeds limit of {MAX_FILES}")
-                        await progress_message.edit_text(
-                            f"<b>❌ ZIP contains too many files ({total_files}). Max allowed: {MAX_FILES}.</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    total_extracted_size = sum(zip_ref.getinfo(f).file_size for f in file_list)
-                    if total_extracted_size > MAX_EXTRACTED_SIZE:
-                        logger.error(f"ZIP extracted size {total_extracted_size} bytes exceeds limit of {MAX_EXTRACTED_SIZE}")
-                        await progress_message.edit_text(
-                            f"<b>❌ ZIP extracted size ({total_extracted_size / (1024 * 1024):.2f} MB) exceeds limit ({MAX_EXTRACTED_SIZE / (1024 * 1024):.2f} MB).</b>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        return
-                    extracted_files = []
-                    for i, file in enumerate(file_list, 1):
-                        zip_ref.extract(file, extract_folder)
-                        extracted_files.append(os.path.join(extract_folder, file))
-                        if i % 10 == 0 or i == total_files:  # Update every 10 files or at the end
-                            await update_progress_bar(progress_message, i, total_files, "Extracting ZIP")
-                            await asyncio.sleep(0.1)  # Rate limit
-                logger.info(f"Extracted ZIP for user {user_id}")
-            except zipfile.BadZipFile as e:
-                logger.error(f"Invalid ZIP file for user {user_id}: {e}")
-                await progress_message.edit_text(
-                    f"<b>❌ Invalid ZIP file: {str(e)}. Please ensure the file is a valid ZIP.</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-
-            valid_extensions = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".img")
-            image_files = natural_sort([
-                f for f in extracted_files
-                if os.path.splitext(f)[1].lower() in valid_extensions
-            ])
-
-            if not image_files:
-                logger.error(f"No images found in ZIP for user {user_id}")
-                await progress_message.edit_text(
-                    "<b>❌ No images found in the ZIP.</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-
-            async def pdf_progress(current, total):
-                await update_progress_bar(progress_message, current, total, "Converting to PDF")
-
-            try:
-                generate_pdf(image_files, pdf_path, pdf_progress)
-                logger.info(f"Converted to PDF for user {user_id}")
-            except Exception as e:
-                logger.error(f"PDF conversion error for user {user_id}: {e}")
-                await progress_message.edit_text(
-                    f"<b>❌ Error converting to PDF: {e}</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                return
-
-            try:
-                await client.send_document(
-                    chat_id=chat_id,
-                    document=pdf_path,
-                    caption=f"<b>Here is your PDF: {new_pdf_name}.pdf 📄</b>",
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=message_id
-                )
-                await progress_message.edit_text(
-                    "<b>✅ PDF generated and sent!</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                logger.info(f"Uploaded PDF for user {user_id}")
-            except Exception as e:
-                logger.error(f"Upload error for user {user_id}: {e}")
-                await progress_message.edit_text(
-                    f"<b>❌ Error uploading PDF: {e}</b>",
-                    parse_mode=ParseMode.HTML
-                )
-
-    except Exception as e:
-        logger.error(f"Error in handle_pdf_name_reply for user {user_id}: {e}")
-        await message.reply_text(
-            f"<b>❌ Error: {str(e)}</b>",
-            parse_mode=ParseMode.HTML
-        )
-
-@Client.on_message(filters.private & filters.command("pdf"))
-async def pdf_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-    if not check:
-        await message.reply_text(
-            f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    await message.reply_text(
-        "<b>📂 Please send a ZIP file containing images. Reply to this message with the ZIP file.</b>",
-        parse_mode=ParseMode.HTML
-    )
-
-@Client.on_message(filters.private & filters.document & filters.reply)
-async def handle_zip_reply(client: Client, message: Message):
-    user_id = message.from_user.id
-    check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
-    if not check:
-        await message.reply_text(
-            f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    if not message.reply_to_message or "Please send a ZIP file" not in message.reply_to_message.text:
-        return
-
-    document = message.document
-    if not document.file_name.endswith(".zip"):
-        await message.reply_text("<b>❌ Please send a valid ZIP file.</b>", parse_mode=ParseMode.HTML)
-        return
-
-    file_size_mb = document.file_size / (1024 * 1024)
-    if file_size_mb > 20:
-        logger.error(f"File {document.file_name} size {file_size_mb:.2f} MB exceeds 20 MB limit")
-        await message.reply_text(
-            "<b>❌ File size exceeds 20 MB. Telegram API limits downloads to 20 MB. Please send a smaller ZIP or use a local Bot API server.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-
-    logger.info(f"Prompting user {user_id} for new PDF name")
-    prompt_message = await message.reply_text(
-        "<b>Please reply to this message with the new name for your PDF (without .pdf extension).</b>",
-        parse_mode=ParseMode.HTML
-    )
-
-    if user_settings_collection is not None:
-        try:
-            await user_settings_collection.update_one(
-                {"user_id": user_id},
-                {"$set": {
-                    "pending_pdf_conversion": {
-                        "message_id": message.id,
-                        "chat_id": message.chat.id,
-                        "document": {
-                            "file_id": document.file_id,
-                            "file_name": document.file_name,
-                            "file_size": document.file_size
-                        }
-                    }
-                }},
-                upsert=True
-            )
-            logger.info(f"Stored conversion context for user {user_id}")
-        except Exception as e:
-            logger.error(f"MongoDB store error for user {user_id}: {e}")
-            await message.reply_text(
-                "<b>⚠️ Database error, but you can still reply with the PDF name.</b>",
-                parse_mode=ParseMode.HTML
-            )
-    else:
-        logger.error(f"MongoDB not available for user {user_id}")
-        await message.reply_text(
-            "<b>❌ Database unavailable. Please try again later.</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+if __name__ == "__main__":
+    app.run()
