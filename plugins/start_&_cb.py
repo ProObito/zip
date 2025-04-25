@@ -2,7 +2,7 @@
 import random
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, CallbackQuery
-from helper.database import add_autho_user, is_autho_user_exist
+from helper.database import add_user, is_autho_user_exist
 from config import Config, Txt
 
 async def check_subscription(client: Client, user_id: int, channel: str) -> bool:
@@ -38,7 +38,7 @@ async def start(client, message):
         return
 
     # Add user to database
-    await add_autho_user(user.id, user.username, user.first_name, user.last_name)
+    await add_user(user.id, user.username, user.first_name, user.last_name)
 
     # Authorized user check
     is_autho = await is_autho_user_exist(user.id)
