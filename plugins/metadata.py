@@ -53,7 +53,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.private & filters.command("banner"))
     async def banner_settings_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN_IDS
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
@@ -191,7 +191,7 @@ def register_handlers(app: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer()
 
-    @app.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN_IDS))
+    @app.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN))
     async def add_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/addautho_user").strip().split()
         check = True
@@ -219,7 +219,7 @@ def register_handlers(app: Client):
                 parse_mode="html"
             )
 
-    @app.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN_IDS))
+    @app.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN))
     async def delete_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/delautho_user").strip().split()
         check = True
@@ -247,7 +247,7 @@ def register_handlers(app: Client):
                 parse_mode="html"
             )
 
-    @app.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN_IDS))
+    @app.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN))
     async def authorise_user_list(client: Client, message: Message):
         autho_users = await get_all_autho_users()
         if autho_users:
@@ -280,7 +280,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.private & filters.command("set_thumb"))
     async def set_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN_IDS
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to set a thumbnail ⚠️</b>\n"
@@ -317,7 +317,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.private & filters.command("see_thumb"))
     async def see_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in ADMIN_IDS
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to view thumbnails ⚠️</b>\n"
@@ -341,7 +341,7 @@ def register_handlers(app: Client):
     @app.on_message(filters.private & filters.command("del_thumb"))
     async def delete_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in ADMIN_IDS
+        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to delete thumbnails ⚠️</b>\n"
