@@ -8,6 +8,8 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from PIL import Image, ImageDraw, ImageFont
+import PyPDF2
+import img2pdf
 from config import Config
 
 # Set up logging
@@ -108,8 +110,13 @@ async def check_subscription(client, user_id):
     logger.debug(f"User {user_id} is subscribed to both channels")
     return True
 
+# Raw update handler to log all incoming updates
+@app.on_raw_update()
+async def debug_raw_updates(client, update, users, chats):
+    logger.debug(f"Raw update received: {update}")
+
 # Fallback handler for all messages
-@Client.on_message(filters.private)
+@app.on_message(filters.private)
 async def debug_all_messages(client, message):
     user_id = message.from_user.id
     logger.debug(f"Received message from user {user_id}: {message}")
@@ -117,7 +124,7 @@ async def debug_all_messages(client, message):
         logger.debug(f"Document details: name={message.document.file_name}, mime={message.document.mime_type}, ext={os.path.splitext(message.document.file_name)[1].lower()}")
 
 # Handle /start command
-@Client.on_message(filters.command("start") & filters.private)
+@app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent /start")
@@ -140,8 +147,16 @@ async def start_command(client, message):
     )
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} started the bot.")
 
+# Handle /test command to verify bot responsiveness
+@app.on_message(filters.command("test") & filters.private)
+async def test_command(client, message):
+    user_id = message.from_user.id
+    logger.debug(f"User {user_id} sent /test")
+    await message.reply("Bot is alive and responding! Try uploading a ZIP file.")
+    await client.send_message(Config.LOG_CHANNEL, f"User {user_id} tested the bot.")
+
 # Handle /banner command (admin-only)
-@Client.on_message(filters.command("banner") & filters.private)
+@app.on_message(filters.command("banner") & filters.private)
 async def banner_command(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent /banner")
@@ -180,7 +195,7 @@ async def banner_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} accessed /banner.")
 
 # Handle inline button callbacks
-@Client.on_callback_query()
+@app.on_callback_query()
 async def button_callback(client, query):
     user_id = query.from_user.id
     data = query.data
@@ -318,7 +333,7 @@ def get_main_menu():
     )
 
 # Handle text input (e.g., URL, rename)
-@Client.on_message(filters.text & filters.private)
+@app.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
     logger.debug(f"User {user_id} sent text: {message.text}")
@@ -347,7 +362,7 @@ async def handle_text(client, message):
             user_data[user_id]["zip_path"] = None
 
 # Handle file uploads (PDF, ZIP, images, etc.)
-@Client.on_message(filters.document & filters.private)
+@app.on_message(filters.document & filters.private)
 async def handle_document(client, message):
     user_id = message.from_user.id
     document = message.document
@@ -408,7 +423,7 @@ async def handle_document(client, message):
             return
 
         # Handle ZIP file
-        if file_ext == ".zip" or mime_type in ["application/zip", "application/x-zip-compressed"]:
+        if file_ext == ".zip" or "zip" in mime_type.lower():
             logger.debug(f"Handling ZIP file for user {user_id}")
             if user_data[user_id].get("awaiting") == "merge_zip":
                 second_zip = f"second_{user_id}.zip"
