@@ -96,7 +96,7 @@ async def check_subscription(client, user_id):
     return True
 
 # Handle /start command
-@Client.on_message(filters.command("start") & filters.private)
+@app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
     user_id = message.from_user.id
     if not await check_subscription(client, user_id):
@@ -119,7 +119,7 @@ async def start_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} started the bot.")
 
 # Handle /banner command (admin-only)
-@Client.on_message(filters.command("banner") & filters.private)
+@app.on_message(filters.command("banner") & filters.private)
 async def banner_command(client, message):
     user_id = message.from_user.id
     if user_id not in Config.ADMIN:
@@ -127,7 +127,16 @@ async def banner_command(client, message):
         return
 
     if not await check_subscription(client, user_id):
-        await message.reply("Please join the required channels first! Use /start to check.")
+        keyboard = [
+            [InlineKeyboardButton("Join Channel 1", url=f"https://t.me/{Config.FORCE_SUB_1}")],
+            [InlineKeyboardButton("Join Channel 2", url=f"https://t.me/{Config.FORCE_SUB_2}")],
+            [InlineKeyboardButton("Check Subscription", callback_data="check_sub")]
+        ]
+        await message.reply_photo(
+            photo=Config.START_PIC,
+            caption="Please join both channels to use this bot!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     if user_id not in user_data:
@@ -148,7 +157,7 @@ async def banner_command(client, message):
     await client.send_message(Config.LOG_CHANNEL, f"User {user_id} accessed /banner.")
 
 # Handle inline button callbacks
-@Client.on_callback_query()
+@app.on_callback_query()
 async def button_callback(client, query):
     user_id = query.from_user.id
     data = query.data
@@ -253,6 +262,11 @@ async def button_callback(client, query):
         user_data[user_id]["awaiting"] = "merge_zip"
         user_data[user_id]["first_zip"] = data.split("_", 3)[-1]
 
+    elif data.startswith("rename_zip_"):
+        await query.message.reply("Please send the new file name for the ZIP (e.g., newname.zip):")
+        user_data[user_id]["awaiting"] = "rename_zip"
+        user_data[user_id]["zip_path"] = data.split("_", 3)[-1]
+
     elif data == "close":
         await query.message.delete()
 
@@ -268,23 +282,46 @@ def get_main_menu():
         ]
     )
 
-# Handle text input (e.g., URL)
-@Client.on_message(filters.text & filters.private)
+# Handle text input (e.g., URL, rename)
+@app.on_message(filters.text & filters.private)
 async def handle_text(client, message):
     user_id = message.from_user.id
-    if user_id in user_data and user_data[user_id].get("awaiting") == "url":
-        url = message.text
-        user_data[user_id]["banner"]["click_url"] = url
-        user_data[user_id]["awaiting"] = None
-        await message.reply(f"URL set to: {url}")
-        await client.send_message(Config.LOG_CHANNEL, f"User {user_id} set banner URL to {url}.")
+    if user_id in user_data:
+        if user_data[user_id].get("awaiting") == "url":
+            url = message.text
+            user_data[user_id]["banner"]["click_url"] = url
+            user_data[user_id]["awaiting"] = None
+            await message.reply(f"URL set to: {url}")
+            await client.send_message(Config.LOG_CHANNEL, f"User {user_id} set banner URL to {url}.")
+        
+        elif user_data[user_id].get("awaiting") == "rename_zip":
+            new_name = message.text.strip()
+            if not new_name.lower().endswith(".zip"):
+                new_name += ".zip"
+            zip_path = user_data[user_id]["zip_path"]
+            renamed_path = f"renamed_{user_id}_{new_name}"
+            os.rename(zip_path, renamed_path)
+            await message.reply_document(document=renamed_path, filename=new_name)
+            await client.send_message(Config.LOG_CHANNEL, f"User {user_id} renamed ZIP to {new_name}.")
+            os.remove(renamed_path)
+            user_data[user_id]["awaiting"] = None
+            user_data[user_id]["zip_path"] = None
 
 # Handle file uploads (PDF, ZIP, images, etc.)
-@Client.on_message(filters.document & filters.private)
+@app.on_message(filters.document & filters.private)
 async def handle_document(client, message):
     user_id = message.from_user.id
     if not await check_subscription(client, user_id):
-        await message.reply("Please join the required channels first! Use /start to check.")
+        keyboard = [
+            [InlineKeyboardButton("Join Channel 1", url=f"https://t.me/{Config.FORCE_SUB_1}")],
+            [InlineKeyboardButton("Join Channel 2", url=f"https://t.me/{Config.FORCE_SUB_2}")],
+            [InlineKeyboardButton("Check Subscription", callback_data="check_sub")]
+        ]
+        await message.reply_photo(
+            photo=Config.START_PIC,
+            caption="Please join both channels to use this bot!",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     document = message.document
@@ -349,6 +386,7 @@ async def handle_document(client, message):
             [InlineKeyboardButton("Zip to CBZ", callback_data=f"zip_to_cbz_{zip_path}")],
             [InlineKeyboardButton("Unzip", callback_data=f"unzip_{zip_path}")],
             [InlineKeyboardButton("Merge Zip", callback_data=f"merge_zip_{zip_path}")],
+            [InlineKeyboardButton("Rename", callback_data=f"rename_zip_{zip_path}")],
             [InlineKeyboardButton("Close", callback_data="close")]
         ]
         await message.reply(
