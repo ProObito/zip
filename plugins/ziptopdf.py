@@ -4,17 +4,12 @@ import time
 import zipfile
 import io
 import asyncio
-import logging
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from PIL import Image, ImageDraw, ImageFont
 import PyPDF2
 import img2pdf
 from config import Config
-
-# Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Initialize Pyrogram client
 app = Client(
