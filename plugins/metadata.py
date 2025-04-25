@@ -7,13 +7,13 @@ from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
-from database import (
+from helper.database import (
     is_autho_user_exist, add_autho_user, remove_autho_user, get_all_autho_users,
     set_thumbnail, get_thumbnail, delete_thumbnail,
     set_banner_status, get_banner_status, set_banner_position, get_banner_position,
     set_banner_url, get_banner_url, set_banner_image, get_banner_image, delete_banner_image
 )
-from utils import create_banner_pdf, add_banner_to_pdf, add_banner_to_epub
+from helper.utils import create_banner_pdf, add_banner_to_pdf, add_banner_to_epub
 
 async def show_banner_settings(client: Client, message: Message, user_id: int):
     banner_status = await get_banner_status(user_id)
