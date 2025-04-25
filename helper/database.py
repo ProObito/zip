@@ -1,4 +1,4 @@
-# database.py
+# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
 from pymongo import MongoClient
 from config import Config
 
