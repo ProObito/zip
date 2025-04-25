@@ -1,48 +1,55 @@
-from pyrogram import Client, filters 
-from helper.database import db
+# plugins/thumb_&_cap.py
+from pyrogram import Client, filters
+from pyrogram.types import ForceReply
+from database import set_thumbnail, get_thumbnail, delete_thumbnail, set_caption, get_caption, delete_caption
+from config import Config
 
-@Client.on_message(filters.private & filters.command(['set_caption', 'setcaption']))
-async def add_caption(client, message):
-    if len(message.command) == 1:
-       return await message.reply_text("**Gɪᴠᴇ Tʜᴇ Cᴀᴩᴛɪᴏɴ\n\nExᴀᴍᴩʟᴇ:- `/set_caption {filename}\n\n💾 Sɪᴢᴇ: {filesize}\n\n⏰ Dᴜʀᴀᴛɪᴏɴ: {duration}`**")
-    caption = message.text.split(" ", 1)[1]
-    await db.set_caption(message.from_user.id, caption=caption)
-    await message.reply_text("**✅ Cᴀᴩᴛɪᴏɴ Sᴀᴠᴇᴅ**")
-   
-@Client.on_message(filters.private & filters.command(['del_caption', 'delcaption']))
-async def delete_caption(client, message):
-    caption = await db.get_caption(message.from_user.id)  
-    if not caption:
-       return await message.reply_text("**😔 Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Cᴀᴩᴛɪᴏɴ**")
-    await db.set_caption(message.from_user.id, caption=None)
-    await message.reply_text("**❌️ Cᴀᴩᴛɪᴏɴ Dᴇʟᴇᴛᴇᴅ**")
-                                       
-@Client.on_message(filters.private & filters.command(['see_caption', 'view_caption']))
-async def see_caption(client, message):
-    caption = await db.get_caption(message.from_user.id)  
-    if caption:
-       await message.reply_text(f"**Yᴏᴜ'ʀᴇ Cᴀᴩᴛɪᴏɴ:-**\n\n`{caption}`")
-    else:
-       await message.reply_text("**😔 Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Cᴀᴩᴛɪᴏɴ**")
-
-
-@Client.on_message(filters.private & filters.command(['view_thumb', 'viewthumb']))
-async def viewthumb(client, message):    
-    thumb = await db.get_thumbnail(message.from_user.id)
-    if thumb:
-       await client.send_photo(chat_id=message.chat.id, photo=thumb)
-    else:
-        await message.reply_text("😔 **Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Tʜᴜᴍʙɴᴀɪʟ**")
-		
-@Client.on_message(filters.private & filters.command(['del_thumb', 'delthumb']))
-async def removethumb(client, message):
-    await db.set_thumbnail(message.from_user.id, file_id=None)
-    await message.reply_text("❌️ **Tʜᴜᴍʙɴᴀɪʟ Dᴇʟᴇᴛᴇᴅ**")
-	
-@Client.on_message(filters.private & filters.photo)
+@Client.on_message(filters.private & filters.command("set_thumb") & filters.user(Config.ADMIN))
 async def addthumbs(client, message):
-    mkn = await message.reply_text("Please Wait ...")
-    await db.set_thumbnail(message.from_user.id, file_id=message.photo.file_id)                
-    await mkn.edit("✅️ **Tʜᴜᴍʙɴᴀɪʟ Sᴀᴠᴇᴅ**")
+    if message.reply_to_message and message.reply_to_message.photo:
+        await set_thumbnail(message.from_user.id, file_id=message.reply_to_message.photo.file_id)
+        await message.reply_text("✅ Thumbnail set successfully!")
+    else:
+        await message.reply_text("Please reply to a photo to set it as your thumbnail.", reply_markup=ForceReply())
 
+@Client.on_message(filters.private & filters.command("see_thumb") & filters.user(Config.ADMIN))
+async def seethumbs(client, message):
+    thumbnail = await get_thumbnail(message.from_user.id)
+    if thumbnail:
+        await message.reply_photo(photo=thumbnail['file_id'], caption="This is your current thumbnail.")
+    else:
+        await message.reply_text("No thumbnail set.")
 
+@Client.on_message(filters.private & filters.command("del_thumb") & filters.user(Config.ADMIN))
+async def delthumbs(client, message):
+    if await delete_thumbnail(message.from_user.id):
+        await message.reply_text("✅ Thumbnail deleted successfully!")
+    else:
+        await message.reply_text("No thumbnail to delete.")
+
+@Client.on_message(filters.private & filters.command("set_caption") & filters.user(Config.ADMIN))
+async def setcaption(client, message):
+    if len(message.command) > 1:
+        caption = " ".join(message.command[1:])
+        await set_caption(message.from_user.id, caption)
+        await message.reply_text(f"✅ Caption set to: `{caption}`")
+    else:
+        await message.reply_text("Please provide a caption.\nExample: `/set_caption File: {filename}`", reply_markup=ForceReply())
+
+@Client.on_message(filters.private & filters.command("see_caption") & filters.user(Config.ADMIN))
+async def seecaption(client, message):
+    caption = await get_caption(message.from_user.id)
+    if caption:
+        await message.reply_text(f"Your current caption: `{caption}`")
+    else:
+        await message.reply_text("No caption set.")
+
+@Client.on_message(filters.private & filters.command("del_caption") & filters.user(Config.ADMIN))
+async def delcaption(client, message):
+    if await delete_caption(message.from_user.id):
+        await message.reply_text("✅ Caption deleted successfully!")
+    else:
+        await message.reply_text("No caption to delete.")
+
+def register_handlers(app: Client):
+    app.on_message(filters.private & filters.command(["set_thumb", "see_thumb", "del_thumb", "set_caption", "see_caption", "del_caption"]))(lambda c, m: None)  # Placeholder for registration
