@@ -1,12 +1,12 @@
-# +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
+# banner.py
 import os
 import tempfile
 import asyncio
 import shutil
 from PIL import Image
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import Config
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from config import Config, ADMIN, SUPPORT_CHAT
 from helper.database import (
     is_autho_user_exist, add_autho_user, remove_autho_user, get_all_autho_users,
     set_thumbnail, get_thumbnail, delete_thumbnail,
@@ -49,21 +49,21 @@ async def show_banner_settings(client: Client, message: Message, user_id: int):
         parse_mode="html"
     )
 
-def register_handlers(app: Client):
-    @app.on_message(filters.private & filters.command("banner"))
+def register_handlers(client: Client):
+    @client.on_message(filters.private & filters.command("banner"))
     async def banner_settings_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
+        check = await is_autho_user_exist(user_id) or user_id in admin
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to use this command ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
         await show_banner_settings(client, message, user_id)
 
-    @app.on_callback_query(filters.regex(r"banner_toggle_(\d+)"))
+    @client.on_callback_query(filters.regex(r"banner_toggle_(\d+)"))
     async def toggle_banner_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -75,7 +75,7 @@ def register_handlers(app: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer("Banner status updated.")
 
-    @app.on_callback_query(filters.regex(r"banner_position_(\d+)"))
+    @client.on_callback_query(filters.regex(r"banner_position_(\d+)"))
     async def position_banner_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -94,7 +94,7 @@ def register_handlers(app: Client):
         )
         await callback_query.answer()
 
-    @app.on_callback_query(filters.regex(r"set_position_(\d+)_(\w+)"))
+    @client.on_callback_query(filters.regex(r"set_position_(\d+)_(\w+)"))
     async def set_position_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         position = callback_query.data.split("_")[3]
@@ -106,7 +106,7 @@ def register_handlers(app: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer(f"Banner position set to {position}.")
 
-    @app.on_callback_query(filters.regex(r"banner_image_(\d+)"))
+    @client.on_callback_query(filters.regex(r"banner_image_(\d+)"))
     async def banner_image_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -129,7 +129,7 @@ def register_handlers(app: Client):
         )
         await callback_query.answer()
 
-    @app.on_callback_query(filters.regex(r"upload_banner_(\d+)"))
+    @client.on_callback_query(filters.regex(r"upload_banner_(\d+)"))
     async def upload_banner_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -163,7 +163,7 @@ def register_handlers(app: Client):
         except Exception as e:
             await callback_query.message.edit_text(f"❌ Error setting banner: {e}", parse_mode="html")
 
-    @app.on_callback_query(filters.regex(r"remove_banner_(\d+)"))
+    @client.on_callback_query(filters.regex(r"remove_banner_(\d+)"))
     async def remove_banner_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -181,7 +181,7 @@ def register_handlers(app: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer("Banner image removed.")
 
-    @app.on_callback_query(filters.regex(r"banner_back_(\d+)"))
+    @client.on_callback_query(filters.regex(r"banner_back_(\d+)"))
     async def banner_back_callback(client: Client, callback_query):
         user_id = int(callback_query.data.split("_")[2])
         if callback_query.from_user.id != user_id:
@@ -191,7 +191,7 @@ def register_handlers(app: Client):
         await show_banner_settings(client, callback_query.message, user_id)
         await callback_query.answer()
 
-    @app.on_message(filters.private & filters.command("addautho_user") & filters.user(Config.ADMIN))
+    @client.on_message(filters.private & filters.command("addautho_user") & filters.user(admin))
     async def add_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/addautho_user").strip().split()
         check = True
@@ -219,7 +219,7 @@ def register_handlers(app: Client):
                 parse_mode="html"
             )
 
-    @app.on_message(filters.private & filters.command("delautho_user") & filters.user(Config.ADMIN))
+    @client.on_message(filters.private & filters.command("delautho_user") & filters.user(admin))
     async def delete_authorise_user(client: Client, message: Message):
         ids = message.text.removeprefix("/delautho_user").strip().split()
         check = True
@@ -247,7 +247,7 @@ def register_handlers(app: Client):
                 parse_mode="html"
             )
 
-    @app.on_message(filters.private & filters.command("autho_users") & filters.user(Config.ADMIN))
+    @client.on_message(filters.private & filters.command("autho_users") & filters.user(admin))
     async def authorise_user_list(client: Client, message: Message):
         autho_users = await get_all_autho_users()
         if autho_users:
@@ -259,7 +259,7 @@ def register_handlers(app: Client):
         else:
             await message.reply_text("No authorized users found.", parse_mode="html")
 
-    @app.on_message(filters.private & filters.command("check_autho"))
+    @client.on_message(filters.private & filters.command("check_autho"))
     async def check_authorise_user(client: Client, message: Message):
         user_id = message.from_user.id
         check = await is_autho_user_exist(user_id)
@@ -273,18 +273,18 @@ def register_handlers(app: Client):
             await message.reply_text(
                 f"**Nope, You are not an Authorised user 🔴**\n"
                 f"<blockquote>You can't send files or set thumbnails/banners.</blockquote>\n"
-                f"**Contact {Config.SUPPORT_CHAT} to get authorized.**",
+                f"**Contact {SUPPORT_CHAT} to get authorized.**",
                 parse_mode="html"
             )
 
-    @app.on_message(filters.private & filters.command("set_thumb"))
+    @client.on_message(filters.private & filters.command("set_thumb"))
     async def set_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
+        check = await is_autho_user_exist(user_id) or user_id in admin
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to set a thumbnail ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -314,14 +314,14 @@ def register_handlers(app: Client):
         except Exception as e:
             await message.reply_text(f"❌ Error setting thumbnail: {e}", parse_mode="html")
 
-    @app.on_message(filters.private & filters.command("see_thumb"))
+    @client.on_message(filters.private & filters.command("see_thumb"))
     async def see_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
+        check = await is_autho_user_exist(user_id) or user_id in admin
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to view thumbnails ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -338,14 +338,14 @@ def register_handlers(app: Client):
         else:
             await message.reply_text("🚫 No thumbnail set.", parse_mode="html")
 
-    @app.on_message(filters.private & filters.command("del_thumb"))
+    @client.on_message(filters.private & filters.command("del_thumb"))
     async def delete_thumbnail_handler(client: Client, message: Message):
         user_id = message.from_user.id
-        check = await is_autho_user_exist(user_id) or user_id in Config.ADMIN
+        check = await is_autho_user_exist(user_id) or user_id in admin
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not authorized to delete thumbnails ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -361,14 +361,14 @@ def register_handlers(app: Client):
         else:
             await message.reply_text("🚫 No thumbnail to delete.", parse_mode="html")
 
-    @app.on_message(filters.private & filters.document & ~filters.regex(r"\.zip$"))
+    @client.on_message(filters.private & filters.document & ~filters.regex(r"\.zip$"))
     async def handle_non_zip_file(client: Client, message: Message):
         user_id = message.from_user.id
         check = await is_autho_user_exist(user_id)
         if not check:
             await message.reply_text(
                 f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-                f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
+                f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
                 parse_mode="html"
             )
             return
@@ -384,7 +384,7 @@ def register_handlers(app: Client):
                 parse_mode="html"
             )
 
-    @app.on_callback_query(filters.regex(r"add_banner_(\d+)"))
+    @client.on_callback_query(filters.regex(r"add_banner_(\d+)"))
     async def add_banner_callback(client: Client, callback_query):
         user_id = callback_query.from_user.id
         message_id = int(callback_query.data.split("_")[2])
@@ -440,7 +440,7 @@ def register_handlers(app: Client):
             except Exception as e:
                 await callback_query.message.edit_text(f"❌ Error processing file: {e}")
 
-    @app.on_callback_query(filters.regex("close"))
+    @client.on_callback_query(filters.regex("close"))
     async def handle_close_callback(client: Client, callback_query):
         await callback_query.message.delete()
-        await callback_query.answer("Message closed.")
+        await callback_query.answer("🍌 Message closed.")
