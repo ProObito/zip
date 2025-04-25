@@ -7,7 +7,7 @@ import shutil
 from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import SUPPORT_CHAT
+from config import Config
 from helper.database import is_autho_user_exist, get_thumbnail, get_banner_status, get_banner_image, get_banner_url, get_banner_position
 from helper.utils import natural_sort, remove_duplicates, create_banner_pdf, add_banner_to_pdf
 
@@ -46,7 +46,7 @@ async def handle_zip_file(client: Client, message):
     if not check:
         await message.reply_text(
             f"<b>⚠️ You are not an Authorised User ⚠️</b>\n"
-            f"<blockquote>Contact {SUPPORT_CHAT} to get authorized.</blockquote>",
+            f"<blockquote>Contact {Config.SUPPORT_CHAT} to get authorized.</blockquote>",
             parse_mode="html"
         )
         return
