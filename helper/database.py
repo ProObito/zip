@@ -1,122 +1,91 @@
-import motor.motor_asyncio
+# database.py
+from pymongo import MongoClient
 from config import Config
-from .utils import send_log
 
-class Database:
+mongo_client = MongoClient(DB_URL)
+db = mongo_client[DB_NAME]
+autho_users_collection = db["authorized_users"]
+user_settings_collection = db["user_settings"]
 
-    def __init__(self, uri, database_name):
-        self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-        self.db = self._client[database_name]
-        self.col = self.db.user
+async def add_autho_user(user_id: int):
+    autho_users_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id}},
+        upsert=True
+    )
 
-    def new_user(self, id):
-        return dict(
-            _id=int(id),                                   
-            file_id=None,
-            caption=None,
-            prefix=None,
-            suffix=None,
-            metadata="Off",
-        )
+async def remove_autho_user(user_id: int):
+    autho_users_collection.delete_one({"user_id": user_id})
 
-    async def add_user(self, b, m):
-        u = m.from_user
-        if not await self.is_user_exist(u.id):
-            user = self.new_user(u.id)
-            await self.col.insert_one(user)            
-            await send_log(b, u)
+async def is_autho_user_exist(user_id: int) -> bool:
+    return bool(autho_users_collection.find_one({"user_id": user_id}))
 
-    async def is_user_exist(self, id):
-        user = await self.col.find_one({'_id': int(id)})
-        return bool(user)
+async def get_all_autho_users() -> list:
+    return [doc["user_id"] for doc in autho_users_collection.find()]
 
-    async def total_users_count(self):
-        count = await self.col.count_documents({})
-        return count
+async def set_thumbnail(user_id: int, thumbnail_path: str):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"thumbnail_path": thumbnail_path}},
+        upsert=True
+    )
 
-    async def get_all_users(self):
-        all_users = self.col.find({})
-        return all_users
+async def get_thumbnail(user_id: int) -> str:
+    user = user_settings_collection.find_one({"user_id": user_id})
+    return user.get("thumbnail_path") if user else None
 
-    async def delete_user(self, user_id):
-        await self.col.delete_many({'_id': int(user_id)})
-    
-    async def set_thumbnail(self, id, file_id):
-        await self.col.update_one({'_id': int(id)}, {'$set': {'file_id': file_id}})
+async def delete_thumbnail(user_id: int):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$unset": {"thumbnail_path": ""}}
+    )
 
-    async def get_thumbnail(self, id):
-        user = await self.col.find_one({'_id': int(id)})
-        return user.get('file_id', None)
+async def set_banner_status(user_id: int, status: bool):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"banner_status": status}},
+        upsert=True
+    )
 
-    async def set_caption(self, id, caption):
-        await self.col.update_one({'_id': int(id)}, {'$set': {'caption': caption}})
+async def get_banner_status(user_id: int) -> bool:
+    user = user_settings_collection.find_one({"user_id": user_id})
+    return user.get("banner_status", False) if user else False
 
-    async def get_caption(self, id):
-        user = await self.col.find_one({'_id': int(id)})
-        return user.get('caption', None)
-        
-    async def set_prefix(self, id, prefix):
-        await self.col.update_one({'_id': int(id)}, {'$set': {'prefix': prefix}})  
-        
-    async def get_prefix(self, id):
-        user = await self.col.find_one({'_id': int(id)})
-        return user.get('prefix', None)      
-        
-    async def set_suffix(self, id, suffix):
-        await self.col.update_one({'_id': int(id)}, {'$set': {'suffix': suffix}})  
-        
-    async def get_suffix(self, id):
-        user = await self.col.find_one({'_id': int(id)})
-        return user.get('suffix', None)
+async def set_banner_position(user_id: int, position: str):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"banner_position": position}},
+        upsert=True
+    )
 
-    async def get_metadata(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('metadata', "Off")
+async def get_banner_position(user_id: int) -> str:
+    user = user_settings_collection.find_one({"user_id": user_id})
+    return user.get("banner_position", "first") if user else "first"
 
-    async def set_metadata(self, user_id, metadata):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'metadata': metadata}})
+async def set_banner_url(user_id: int, url: str):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"banner_url": url}},
+        upsert=True
+    )
 
-    async def get_title(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('title', 'Encoded by @Anime_Edge')
+async def get_banner_url(user_id: int) -> str:
+    user = user_settings_collection.find_one({"user_id": user_id})
+    return user.get("banner_url", None) if user else None
 
-    async def set_title(self, user_id, title):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'title': title}})
+async def set_banner_image(user_id: int, image_path: str):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"banner_image_path": image_path}},
+        upsert=True
+    )
 
-    async def get_author(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('author', '@Anime_Edge')
+async def get_banner_image(user_id: int) -> str:
+    user = user_settings_collection.find_one({"user_id": user_id})
+    return user.get("banner_image_path") if user else None
 
-    async def set_author(self, user_id, author):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'author': author}})
-
-    async def get_artist(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('artist', '@Anime_Edge')
-
-    async def set_artist(self, user_id, artist):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'artist': artist}})
-
-    async def get_audio(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('audio', 'By @Anime_Edge')
-
-    async def set_audio(self, user_id, audio):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'audio': audio}})
-
-    async def get_subtitle(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('subtitle', "By @Anime_Edge")
-
-    async def set_subtitle(self, user_id, subtitle):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'subtitle': subtitle}})
-
-    async def get_video(self, user_id):
-        user = await self.col.find_one({'_id': int(user_id)})
-        return user.get('video', 'Encoded By @Anime_Edge')
-
-    async def set_video(self, user_id, video):
-        await self.col.update_one({'_id': int(user_id)}, {'$set': {'video': video}})
-
-
-db = Database(Config.DB_URL, Config.DB_NAME)
+async def delete_banner_image(user_id: int):
+    user_settings_collection.update_one(
+        {"user_id": user_id},
+        {"$unset": {"banner_image_path": ""}}
+    )
