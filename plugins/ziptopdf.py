@@ -8,7 +8,7 @@ from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
-from database import is_autho_user_exist, get_thumbnail, get_banner_status, get_banner_image, get_banner_url, get_banner_position
+from helper.database import is_autho_user_exist, get_thumbnail, get_banner_status, get_banner_image, get_banner_url, get_banner_position
 from utils import natural_sort, remove_duplicates, create_banner_pdf, add_banner_to_pdf
 
 async def generate_pdf(image_files, output_path, thumbnail_path=None, banner_path=None, banner_position="first"):
