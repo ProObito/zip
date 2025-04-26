@@ -1,5 +1,5 @@
 # +++ Made By Obito [telegram username: @i_killed_my_clan] +++ #
-TgCrypto==1.2.5 
+TgCrypto==1.2.5
 motor
 dnspython==2.3.0
 hachoir==3.2.0
@@ -8,9 +8,9 @@ pytz==2023.3
 psutil
 ffmpeg
 tqdm
-PyPDF2==3.0.1        # For PDF manipulation
-reportlab==4.0.9      # For creating PDF banner pages
-ebooklib==0.18       # For EPUB handling
+PyPDF2==3.0.1
+reportlab==4.0.9
+ebooklib==0.18
 pyrogram>=2.0.106
 img2pdf>=0.5.1
 Pillow>=10.0.0
