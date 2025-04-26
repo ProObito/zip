@@ -4,12 +4,26 @@ import time
 import zipfile
 import io
 import asyncio
-from pyrogram import Client, filters
+import logging
+from pyrogram import Client, filters, __version__ as pyrogram_version
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from PIL import Image, ImageDraw, ImageFont
 import PyPDF2
 import img2pdf
 from config import Config
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Log Pyrogram version
+logger.info(f"Using Pyrogram version: {pyrogram_version}")
+
+# Delete existing session file to fix BadServerSalt
+session_file = "BannerBot.session"
+if os.path.exists(session_file):
+    logger.info("Deleting existing session file to resolve BadServerSalt")
+    os.remove(session_file)
 
 # Initialize Pyrogram client
 app = Client(
