@@ -32,7 +32,7 @@ user_choice = {}   # stores selected compression level
 
 
 # === /compdf Command ===
-@Bot.on_message(filters.command("compdf") & filters.private)
+@Client.on_message(filters.command("compdf") & filters.private)
 async def compdf_cmd(client: Client, message: Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -54,7 +54,7 @@ async def compdf_cmd(client: Client, message: Message):
 
 
 # === Compression Level Selection ===
-@Bot.on_callback_query(filters.regex(r"compress_\d+"))
+@Client.on_callback_query(filters.regex(r"compress_\d+"))
 async def set_compression_level(client: Client, query: CallbackQuery):
     uid = query.from_user.id
     level = int(query.data.split("_")[1])
@@ -64,7 +64,7 @@ async def set_compression_level(client: Client, query: CallbackQuery):
 
 
 # === Handle PDF ===
-@Bot.on_message(filters.document & filters.private)
+@Client.on_message(filters.document & filters.private)
 async def handle_pdf(client: Client, message: Message):
     uid = message.from_user.id
 
