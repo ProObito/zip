@@ -3,6 +3,8 @@ from config import Config
 from .utils import send_log
 
 class Database:
+    db = mongo["PDFBot"]
+thumbs = db["thumbnails"]
 
     def __init__(self, uri, database_name):
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
@@ -119,4 +121,30 @@ class Database:
         await self.col.update_one({'_id': int(user_id)}, {'$set': {'video': video}})
 
 
+import os
+from pymongo import MongoClient
+
+# === Save Thumbnail ===
+def save_thumbnail(user_id: int, thumb_path: str):
+    with open(thumb_path, "rb") as f:
+        thumbs.update_one(
+            {"_id": user_id},
+            {"$set": {"thumb": f.read()}},
+            upsert=True
+        )
+
+# === Get Thumbnail ===
+def get_thumbnail(user_id: int) -> str | None:
+    data = thumbs.find_one({"_id": user_id})
+    if data and data.get("thumb"):
+        thumb_path = f"downloads/{user_id}_thumb.jpg"
+        with open(thumb_path, "wb") as f:
+            f.write(data["thumb"])
+        return thumb_path
+    return None
+
+# === Delete Thumbnail ===
+def delete_thumbnail(user_id: int):
+    thumbs.delete_one({"_id": user_id})
+    
 db = Database(Config.DB_URL, Config.DB_NAME)
