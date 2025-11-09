@@ -9,7 +9,7 @@ merge_mode = {}
 user_pdfs = {}
 
 # === /merge Command ===
-@Bot.on_message(filters.command("merge") & filters.private)
+@Client.on_message(filters.command("merge") & filters.private)
 async def merge_cmd(client: Client, message: Message):
     uid = message.from_user.id
     merge_mode[uid] = True
@@ -20,7 +20,7 @@ async def merge_cmd(client: Client, message: Message):
     )
 
 # === Handle PDF Uploads ===
-@Bot.on_message(filters.document & filters.private)
+@Client.on_message(filters.document & filters.private)
 async def collect_pdfs(client: Client, message: Message):
     uid = message.from_user.id
 
@@ -41,7 +41,7 @@ async def collect_pdfs(client: Client, message: Message):
     await message.reply_text(f"✅ Added: **{file_name}** ({len(user_pdfs[uid])} file(s) total)\nSend more or type /done to merge.")
 
 # === /done Command (to merge PDFs) ===
-@Bot.on_message(filters.command("done") & filters.private)
+@Client.on_message(filters.command("done") & filters.private)
 async def merge_pdfs(client: Client, message: Message):
     uid = message.from_user.id
 
