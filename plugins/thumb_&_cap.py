@@ -16,12 +16,12 @@ def compress_pdf(input_path, output_path):
         writer.write(f)
 
 # === Command Handler ===
-@Bot.on_message(filters.command("compdf") & filters.private)
+@Client.on_message(filters.command("compdf") & filters.private)
 async def compdf_cmd(client: Client, message: Message):
     await message.reply_text("📄 Send me the PDF you want to compress.")
 
 # === PDF File Handler ===
-@Bot.on_message(filters.document & filters.private)
+@Client.on_message(filters.document & filters.private)
 async def handle_pdf(client: Client, message: Message):
     if message.document.mime_type != "application/pdf":
         return await message.reply_text("❌ Please send a valid PDF file.")
