@@ -3,8 +3,6 @@ from config import Config
 from .utils import send_log
 
 class Database:
-    db = mongo["PDFBot"]
-thumbs = db["thumbnails"]
 
     def __init__(self, uri, database_name):
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
