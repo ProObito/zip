@@ -1,48 +1,54 @@
-from pyrogram import Client, filters 
-from helper.database import db
+from pyrogram import Client, filters
+from pyrogram.types import Message
+import os
+from PyPDF2 import PdfReader, PdfWriter
 
-@Client.on_message(filters.private & filters.command(['set_caption', 'setcaption']))
-async def add_caption(client, message):
-    if len(message.command) == 1:
-       return await message.reply_text("**Gɪᴠᴇ Tʜᴇ Cᴀᴩᴛɪᴏɴ\n\nExᴀᴍᴩʟᴇ:- `/set_caption {filename}\n\n💾 Sɪᴢᴇ: {filesize}\n\n⏰ Dᴜʀᴀᴛɪᴏɴ: {duration}`**")
-    caption = message.text.split(" ", 1)[1]
-    await db.set_caption(message.from_user.id, caption=caption)
-    await message.reply_text("**✅ Cᴀᴩᴛɪᴏɴ Sᴀᴠᴇᴅ**")
-   
-@Client.on_message(filters.private & filters.command(['del_caption', 'delcaption']))
-async def delete_caption(client, message):
-    caption = await db.get_caption(message.from_user.id)  
-    if not caption:
-       return await message.reply_text("**😔 Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Cᴀᴩᴛɪᴏɴ**")
-    await db.set_caption(message.from_user.id, caption=None)
-    await message.reply_text("**❌️ Cᴀᴩᴛɪᴏɴ Dᴇʟᴇᴛᴇᴅ**")
-                                       
-@Client.on_message(filters.private & filters.command(['see_caption', 'view_caption']))
-async def see_caption(client, message):
-    caption = await db.get_caption(message.from_user.id)  
-    if caption:
-       await message.reply_text(f"**Yᴏᴜ'ʀᴇ Cᴀᴩᴛɪᴏɴ:-**\n\n`{caption}`")
-    else:
-       await message.reply_text("**😔 Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Cᴀᴩᴛɪᴏɴ**")
+# === Helper Function ===
+def compress_pdf(input_path, output_path):
+    reader = PdfReader(input_path)
+    writer = PdfWriter()
 
+    for page in reader.pages:
+        page.compress_content_streams()  # reduce PDF size
+        writer.add_page(page)
 
-@Client.on_message(filters.private & filters.command(['view_thumb', 'viewthumb']))
-async def viewthumb(client, message):    
-    thumb = await db.get_thumbnail(message.from_user.id)
-    if thumb:
-       await client.send_photo(chat_id=message.chat.id, photo=thumb)
-    else:
-        await message.reply_text("😔 **Yᴏᴜ Dᴏɴ'ᴛ Hᴀᴠᴇ Aɴy Tʜᴜᴍʙɴᴀɪʟ**")
-		
-@Client.on_message(filters.private & filters.command(['del_thumb', 'delthumb']))
-async def removethumb(client, message):
-    await db.set_thumbnail(message.from_user.id, file_id=None)
-    await message.reply_text("❌️ **Tʜᴜᴍʙɴᴀɪʟ Dᴇʟᴇᴛᴇᴅ**")
-	
-@Client.on_message(filters.private & filters.photo)
-async def addthumbs(client, message):
-    mkn = await message.reply_text("Please Wait ...")
-    await db.set_thumbnail(message.from_user.id, file_id=message.photo.file_id)                
-    await mkn.edit("✅️ **Tʜᴜᴍʙɴᴀɪʟ Sᴀᴠᴇᴅ**")
+    with open(output_path, "wb") as f:
+        writer.write(f)
 
+# === Command Handler ===
+@Bot.on_message(filters.command("compdf") & filters.private)
+async def compdf_cmd(client: Client, message: Message):
+    await message.reply_text("📄 Send me the PDF you want to compress.")
 
+# === PDF File Handler ===
+@Bot.on_message(filters.document & filters.private)
+async def handle_pdf(client: Client, message: Message):
+    if message.document.mime_type != "application/pdf":
+        return await message.reply_text("❌ Please send a valid PDF file.")
+
+    file_id = message.document.file_id
+    file_name = message.document.file_name or "input.pdf"
+
+    input_pdf = f"downloads/{file_name}"
+    output_pdf = f"downloads/compressed_{file_name}"
+
+    # Download PDF
+    m = await message.reply_text("⬇️ Downloading your PDF...")
+    await client.download_media(message, file_name=input_pdf)
+
+    await m.edit("⚙️ Compressing your PDF...")
+
+    try:
+        compress_pdf(input_pdf, output_pdf)
+        await message.reply_document(
+            document=output_pdf,
+            caption="✅ PDF successfully compressed!"
+        )
+    except Exception as e:
+        await message.reply_text(f"❌ Error while compressing PDF:\n`{e}`")
+    finally:
+        # Clean up
+        if os.path.exists(input_pdf):
+            os.remove(input_pdf)
+        if os.path.exists(output_pdf):
+            os.remove(output_pdf)
