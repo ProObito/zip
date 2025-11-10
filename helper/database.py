@@ -119,30 +119,37 @@ class Database:
         await self.col.update_one({'_id': int(user_id)}, {'$set': {'video': video}})
 
 
-import os
-from pymongo import MongoClient
+# ==============================
+# 🖼️ Save thumbnail
+# ==============================
+def save_thumbnail(user_id, file_path):
+    with open(file_path, "rb") as f:
+        thumb_data = f.read()
+    thumb_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"thumbnail": thumb_data}},
+        upsert=True
+    )
 
-# === Save Thumbnail ===
-def save_thumbnail(user_id: int, thumb_path: str):
-    with open(thumb_path, "rb") as f:
-        thumbs.update_one(
-            {"_id": user_id},
-            {"$set": {"thumb": f.read()}},
-            upsert=True
-        )
-
-# === Get Thumbnail ===
-def get_thumbnail(user_id: int) -> str | None:
-    data = thumbs.find_one({"_id": user_id})
-    if data and data.get("thumb"):
-        thumb_path = f"downloads/{user_id}_thumb.jpg"
-        with open(thumb_path, "wb") as f:
-            f.write(data["thumb"])
-        return thumb_path
+# ==============================
+# 🖼️ Get thumbnail
+# ==============================
+def get_thumbnail(user_id):
+    data = thumb_col.find_one({"user_id": user_id})
+    if data and "thumbnail" in data:
+        path = f"downloads/{user_id}_thumb.jpg"
+        with open(path, "wb") as f:
+            f.write(data["thumbnail"])
+        return path
     return None
 
-# === Delete Thumbnail ===
-def delete_thumbnail(user_id: int):
-    thumbs.delete_one({"_id": user_id})
+# ==============================
+# 🗑️ Delete thumbnail
+# ==============================
+def delete_thumbnail(user_id):
+    thumb_col.delete_one({"user_id": user_id})
+    path = f"downloads/{user_id}_thumb.jpg"
+    if os.path.exists(path):
+        os.remove(path)
     
 db = Database(Config.DB_URL, Config.DB_NAME)
