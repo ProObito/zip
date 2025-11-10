@@ -1,177 +1,162 @@
 import os
-import asyncio
+import tempfile
+import zipfile
 import pypandoc
+from PyPDF2 import PdfReader, PdfWriter
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
-from helper.database import get_thumbnail, save_thumbnail, delete_thumbnail
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from helper.database import get_thumbnail, get_user_data
 
-# Track user state
-convert_mode = {}
-user_file = {}
-user_steps = {}
-convert_data = {}
+# 🔹 Auto-install Pandoc if missing (Heroku safe)
+def ensure_pandoc():
+    try:
+        pypandoc.get_pandoc_version()
+    except OSError:
+        print("[INFO] Pandoc not found. Downloading...")
+        pypandoc.download_pandoc()
+        print("[INFO] Pandoc installed successfully!")
 
-# ==============================
-# 📦 /convert
-# ==============================
-@Client.on_message(filters.command("convert") & filters.private)
-async def convert_command(client: Client, message: Message):
-    uid = message.from_user.id
-    convert_mode[uid] = True
-    user_steps[uid] = "waiting_file"
-    convert_data[uid] = {}
-    await message.reply_text(
-        "📁 **Conversion Mode Activated!**\n\n"
-        "➡️ Send any supported document (e.g., `.pdf`, `.epub`, `.docx`, `.txt`, `.zip`...)\n"
-        "➡️ Then select which format to convert it to.\n\n"
-        "Type `/cancel` anytime to stop."
-    )
+ensure_pandoc()
 
-# ==============================
-# 📄 Collect file
-# ==============================
-@Client.on_message(filters.document & filters.private)
-async def collect_file(client: Client, message: Message):
-    uid = message.from_user.id
-    if not convert_mode.get(uid) or user_steps.get(uid) != "waiting_file":
-        return
+# ─────────────────────────────────────────────
+# ⚙️ /convert Command
+# ─────────────────────────────────────────────
+@Client.on_message(filters.command("convert") & filters.reply)
+async def convert_file(bot, message):
+    replied = message.reply_to_message
+    if not replied.document:
+        return await message.reply("📂 Reply to a valid document to convert it.")
 
-    file = message.document
-    filename = file.file_name
-    filepath = f"downloads/{uid}_{filename}"
+    file = await replied.download()
+    base, ext = os.path.splitext(file)
+    ext = ext.lower()
 
-    msg = await message.reply_text(f"⬇️ Downloading **{filename}** ...")
-    await client.download_media(message, filepath)
-    await msg.edit_text(f"✅ File downloaded: **{filename}**")
+    # 🔘 Inline format buttons
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📘 To PDF", callback_data=f"to_pdf|{file}")],
+        [InlineKeyboardButton("📚 To EPUB", callback_data=f"to_epub|{file}")],
+        [InlineKeyboardButton("📦 To ZIP", callback_data=f"to_zip|{file}")],
+        [InlineKeyboardButton("🖼️ To CBZ", callback_data=f"to_cbz|{file}")],
+    ])
 
-    user_file[uid] = filepath
-    user_steps[uid] = "waiting_format"
+    await message.reply("📤 Choose a format to convert:", reply_markup=keyboard)
 
-    # Show inline format options
-    buttons = [
-        [
-            InlineKeyboardButton("📄 PDF", callback_data=f"to_pdf"),
-            InlineKeyboardButton("📚 EPUB", callback_data=f"to_epub"),
-        ],
-        [
-            InlineKeyboardButton("📝 DOCX", callback_data=f"to_docx"),
-            InlineKeyboardButton("📜 TXT", callback_data=f"to_txt"),
-        ],
-        [
-            InlineKeyboardButton("📦 ZIP", callback_data=f"to_zip"),
-        ]
-    ]
+# ─────────────────────────────────────────────
+# 🧩 Conversion Handler
+# ─────────────────────────────────────────────
+@Client.on_callback_query(filters.regex(r"^to_(pdf|epub|zip|cbz)\|"))
+async def handle_conversion(bot, query):
+    _, target_fmt, file = query.data.split("_", 1)[1].split("|", 1)
+    msg = await query.message.edit_text(f"⚙️ Converting to **{target_fmt.upper()}**...")
 
-    await message.reply_text(
-        "🔽 **Choose the format you want to convert to:**",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    user_id = query.from_user.id
+    thumb_path = await get_thumbnail(user_id)
 
-# ==============================
-# 🎛️ Handle inline format buttons
-# ==============================
-@Client.on_callback_query(filters.regex("^to_"))
-async def handle_format_selection(client: Client, callback_query):
-    uid = callback_query.from_user.id
-    if not convert_mode.get(uid) or user_steps.get(uid) != "waiting_format":
-        return await callback_query.answer("⚠️ No active conversion!", show_alert=True)
-
-    fmt = callback_query.data.replace("to_", "")
-    convert_data[uid]["format"] = fmt
-    user_steps[uid] = "waiting_name"
-    await callback_query.message.delete()
-    await callback_query.message.reply_text("📝 Send a **new name** for the converted file (without extension):")
-
-# ==============================
-# ⚙️ Handle name
-# ==============================
-@Client.on_message(filters.text & filters.private)
-async def handle_name(client: Client, message: Message):
-    uid = message.from_user.id
-    if not convert_mode.get(uid):
-        return
-
-    if user_steps.get(uid) == "waiting_name":
-        name = message.text.strip().replace("/", "").replace("\\", "")
-        if not name:
-            return await message.reply_text("❌ Invalid name. Try again.")
-        convert_data[uid]["name"] = name
-
-        m = await message.reply_text("⚙️ Starting conversion...")
-        await convert_and_send(client, message, m)
-
-# ==============================
-# 🔄 Convert & Send
-# ==============================
-async def convert_and_send(client: Client, message: Message, m: Message):
-    uid = message.from_user.id
-    src_path = user_file.get(uid)
-    target_fmt = convert_data[uid].get("format")
-    name = convert_data[uid].get("name", f"converted_{uid}")
-    if not src_path or not target_fmt:
-        await m.delete()
-        return await message.reply_text("❌ Missing file or format.")
-
-    output_path = f"downloads/{name}.{target_fmt}"
-    thumb_path = await get_thumbnail(uid)
+    output_path = f"{os.path.splitext(file)[0]}.{target_fmt}"
 
     try:
-        # Pandoc conversion
-        text_content = ""
-        with open(src_path, "r", encoding="utf-8", errors="ignore") as f:
-            text_content = f.read()
-
-        pypandoc.convert_text(
-            text_content,
-            target_fmt,
-            format="auto",
-            outputfile=output_path,
-            extra_args=['--standalone']
-        )
-
-        # Send converted file with thumbnail
-        try:
-            await message.reply_document(
-                document=output_path,
-                thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
-                caption=f"✅ **Converted Successfully!**\n📄 `{name}.{target_fmt}`"
-            )
-        except Exception:
-            await message.reply_document(
-                document=output_path,
-                caption=f"✅ **Converted Successfully (No Thumbnail)**\n📄 `{name}.{target_fmt}`"
-            )
-
-        await m.delete()
+        if target_fmt in ["pdf", "epub"]:
+            pypandoc.convert_file(file, target_fmt, outputfile=output_path)
+        elif target_fmt in ["zip", "cbz"]:
+            with zipfile.ZipFile(output_path, "w") as zipf:
+                zipf.write(file, os.path.basename(file))
+        else:
+            return await msg.edit_text("❌ Invalid format.")
     except Exception as e:
-        await m.edit_text(f"❌ Conversion failed:\n`{e}`")
-        await asyncio.sleep(5)
-        await m.delete()
-    finally:
-        # Cleanup
-        if os.path.exists(src_path):
-            os.remove(src_path)
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        if thumb_path and os.path.exists(thumb_path):
-            os.remove(thumb_path)
-        convert_mode.pop(uid, None)
-        user_file.pop(uid, None)
-        user_steps.pop(uid, None)
-        convert_data.pop(uid, None)
+        return await msg.edit_text(f"❌ Conversion failed:\n`{e}`")
 
-# ==============================
-# 🛑 /cancel
-# ==============================
-@Client.on_message(filters.command("cancel") & filters.private)
-async def cancel_convert(client: Client, message: Message):
-    uid = message.from_user.id
-    if not convert_mode.get(uid):
-        return await message.reply_text("ℹ️ No active conversion.")
-    convert_mode.pop(uid, None)
-    if uid in user_file and os.path.exists(user_file[uid]):
-        os.remove(user_file[uid])
-    user_file.pop(uid, None)
-    user_steps.pop(uid, None)
-    convert_data.pop(uid, None)
-    await message.reply_text("🚫 Conversion cancelled and temp files cleared.")
+    caption = f"✅ Converted to **{target_fmt.upper()}**"
+    await bot.send_document(
+        query.message.chat.id,
+        output_path,
+        caption=caption,
+        thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None
+    )
+
+    await msg.delete()
+    os.remove(file)
+    os.remove(output_path)
+
+# ─────────────────────────────────────────────
+# ✂️ /remove_page Command
+# ─────────────────────────────────────────────
+@Client.on_message(filters.command("remove_page") & filters.reply)
+async def remove_page(bot, message):
+    if not message.reply_to_message or not message.reply_to_message.document:
+        return await message.reply("📄 Reply to a PDF to remove a page.\nUsage: `/remove_page 3`")
+
+    try:
+        page_num = int(message.text.split(maxsplit=1)[1]) - 1
+    except:
+        return await message.reply("⚠️ Invalid page number.")
+
+    file = await message.reply_to_message.download()
+    output_file = tempfile.mktemp(suffix=".pdf")
+
+    try:
+        reader = PdfReader(file)
+        writer = PdfWriter()
+
+        for i in range(len(reader.pages)):
+            if i != page_num:
+                writer.add_page(reader.pages[i])
+
+        with open(output_file, "wb") as f:
+            writer.write(f)
+
+        await message.reply_document(output_file, caption=f"🗑️ Page {page_num + 1} removed.")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+    finally:
+        os.remove(file)
+        if os.path.exists(output_file):
+            os.remove(output_file)
+
+# ─────────────────────────────────────────────
+# ➕ /add_page Command
+# ─────────────────────────────────────────────
+@Client.on_message(filters.command("add_page") & filters.reply)
+async def add_page(bot, message):
+    if len(message.command) < 2:
+        return await message.reply("Usage: `/add_page 2` (reply to the PDF where page will be added)")
+
+    try:
+        page_num = int(message.command[1]) - 1
+    except:
+        return await message.reply("⚠️ Invalid page number.")
+
+    replied = message.reply_to_message
+    if not replied or not replied.document:
+        return await message.reply("📄 Reply to a PDF file where you want to insert a page.")
+
+    # Ask user to send page PDF
+    await message.reply("📥 Now send the PDF page you want to insert (single page).")
+
+    @bot.on_message(filters.document & filters.user(message.from_user.id))
+    async def add_page_handler(bot, msg):
+        new_page_file = await msg.download()
+        main_file = await replied.download()
+        output_file = tempfile.mktemp(suffix=".pdf")
+
+        try:
+            reader_main = PdfReader(main_file)
+            reader_new = PdfReader(new_page_file)
+            writer = PdfWriter()
+
+            for i in range(len(reader_main.pages) + 1):
+                if i == page_num:
+                    writer.add_page(reader_new.pages[0])
+                if i < len(reader_main.pages):
+                    writer.add_page(reader_main.pages[i])
+
+            with open(output_file, "wb") as f:
+                writer.write(f)
+
+            await bot.send_document(message.chat.id, output_file, caption=f"📄 Added new page at {page_num + 1}.")
+        except Exception as e:
+            await bot.send_message(message.chat.id, f"❌ Error: {e}")
+        finally:
+            os.remove(main_file)
+            os.remove(new_page_file)
+            if os.path.exists(output_file):
+                os.remove(output_file)
