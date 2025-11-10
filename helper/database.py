@@ -1,6 +1,7 @@
 import motor.motor_asyncio
 from config import Config
 from .utils import send_log
+from pyrogram import Client
 
 db = client["PdfBot"]
 thumb_col = db["thumbnails"]
