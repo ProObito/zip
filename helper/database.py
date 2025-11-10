@@ -2,6 +2,10 @@ import motor.motor_asyncio
 from config import Config
 from .utils import send_log
 
+db = client["PdfBot"]
+thumb_col = db["thumbnails"]
+
+
 class Database:
 
     def __init__(self, uri, database_name):
