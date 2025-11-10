@@ -1,162 +1,154 @@
 import os
-import tempfile
 import zipfile
-import pypandoc
-from PyPDF2 import PdfReader, PdfWriter
 from pyrogram import Client, filters
+from ebooklib import epub
+from PyPDF2 import PdfReader, PdfWriter
+from helper.database import db, get_thumbnail
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from helper.database import get_thumbnail, get_user_data
 
-# 🔹 Auto-install Pandoc if missing (Heroku safe)
-def ensure_pandoc():
-    try:
-        pypandoc.get_pandoc_version()
-    except OSError:
-        print("[INFO] Pandoc not found. Downloading...")
-        pypandoc.download_pandoc()
-        print("[INFO] Pandoc installed successfully!")
-
-ensure_pandoc()
-
-# ─────────────────────────────────────────────
-# ⚙️ /convert Command
-# ─────────────────────────────────────────────
-@Client.on_message(filters.command("convert") & filters.reply)
-async def convert_file(bot, message):
-    replied = message.reply_to_message
-    if not replied.document:
-        return await message.reply("📂 Reply to a valid document to convert it.")
-
-    file = await replied.download()
-    base, ext = os.path.splitext(file)
-    ext = ext.lower()
-
-    # 🔘 Inline format buttons
+@Client.on_message(filters.command("convert"))
+async def convert_menu(bot, message):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📘 To PDF", callback_data=f"to_pdf|{file}")],
-        [InlineKeyboardButton("📚 To EPUB", callback_data=f"to_epub|{file}")],
-        [InlineKeyboardButton("📦 To ZIP", callback_data=f"to_zip|{file}")],
-        [InlineKeyboardButton("🖼️ To CBZ", callback_data=f"to_cbz|{file}")],
+        [InlineKeyboardButton("📘 To PDF", callback_data="to_pdf"),
+         InlineKeyboardButton("📦 To ZIP", callback_data="to_zip")],
+        [InlineKeyboardButton("📚 To EPUB", callback_data="to_epub"),
+         InlineKeyboardButton("🖼️ To CBZ", callback_data="to_cbz")]
     ])
-
-    await message.reply("📤 Choose a format to convert:", reply_markup=keyboard)
-
-# ─────────────────────────────────────────────
-# 🧩 Conversion Handler
-# ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex(r"^to_(pdf|epub|zip|cbz)\|"))
-async def handle_conversion(bot, query):
-    _, target_fmt, file = query.data.split("_", 1)[1].split("|", 1)
-    msg = await query.message.edit_text(f"⚙️ Converting to **{target_fmt.upper()}**...")
-
-    user_id = query.from_user.id
-    thumb_path = await get_thumbnail(user_id)
-
-    output_path = f"{os.path.splitext(file)[0]}.{target_fmt}"
-
-    try:
-        if target_fmt in ["pdf", "epub"]:
-            pypandoc.convert_file(file, target_fmt, outputfile=output_path)
-        elif target_fmt in ["zip", "cbz"]:
-            with zipfile.ZipFile(output_path, "w") as zipf:
-                zipf.write(file, os.path.basename(file))
-        else:
-            return await msg.edit_text("❌ Invalid format.")
-    except Exception as e:
-        return await msg.edit_text(f"❌ Conversion failed:\n`{e}`")
-
-    caption = f"✅ Converted to **{target_fmt.upper()}**"
-    await bot.send_document(
-        query.message.chat.id,
-        output_path,
-        caption=caption,
-        thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None
+    await message.reply_text(
+        "📂 Choose the format to convert your file:",
+        reply_markup=keyboard
     )
 
-    await msg.delete()
-    os.remove(file)
-    os.remove(output_path)
+@Client.on_callback_query(filters.regex("^to_"))
+async def convert_callback(bot, query):
+    user_id = query.from_user.id
+    format_to = query.data.replace("to_", "")
+    await query.message.edit_text(f"📤 Send the file you want to convert to **{format_to.upper()}**")
 
-# ─────────────────────────────────────────────
-# ✂️ /remove_page Command
-# ─────────────────────────────────────────────
-@Client.on_message(filters.command("remove_page") & filters.reply)
-async def remove_page(bot, message):
-    if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply("📄 Reply to a PDF to remove a page.\nUsage: `/remove_page 3`")
+    # Wait for file
+    response = await bot.listen(user_id, filters.document)
+    file_path = await response.download()
+    base, ext = os.path.splitext(file_path)
 
+    output_file = None
     try:
-        page_num = int(message.text.split(maxsplit=1)[1]) - 1
-    except:
-        return await message.reply("⚠️ Invalid page number.")
+        if format_to == "pdf":
+            if ext.lower() == ".epub":
+                output_file = base + ".pdf"
+                book = epub.read_epub(file_path)
+                writer = PdfWriter()
+                for item in book.get_items():
+                    if item.get_type() == epub.ITEM_DOCUMENT:
+                        writer.add_blank_page()  # Placeholder page
+                with open(output_file, "wb") as f:
+                    writer.write(f)
 
-    file = await message.reply_to_message.download()
-    output_file = tempfile.mktemp(suffix=".pdf")
+            elif ext.lower() in [".zip", ".cbz"]:
+                output_file = base + ".pdf"
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    pdf_writer = PdfWriter()
+                    for item in zip_ref.namelist():
+                        if item.lower().endswith(".jpg") or item.lower().endswith(".png"):
+                            pdf_writer.add_blank_page()
+                    with open(output_file, "wb") as f:
+                        pdf_writer.write(f)
 
-    try:
-        reader = PdfReader(file)
-        writer = PdfWriter()
+        elif format_to == "zip":
+            output_file = base + ".zip"
+            with zipfile.ZipFile(output_file, "w") as zipf:
+                zipf.write(file_path, os.path.basename(file_path))
+
+        elif format_to == "epub":
+            output_file = base + ".epub"
+            book = epub.EpubBook()
+            book.set_identifier("id123456")
+            book.set_title("Converted File")
+            book.set_language("en")
+            c1 = epub.EpubHtml(title='Content', file_name='chap_01.xhtml', lang='en')
+            c1.content = f"<h1>Converted from {ext}</h1>"
+            book.add_item(c1)
+            epub.write_epub(output_file, book, {})
+
+        elif format_to == "cbz":
+            output_file = base + ".cbz"
+            with zipfile.ZipFile(output_file, "w") as zipf:
+                zipf.write(file_path, os.path.basename(file_path))
+
+        else:
+            await query.message.reply_text("❌ Unsupported conversion type.")
+            return
+
+        thumb = await db.get_thumbnail(user_id)
+        thumb_path = get_thumbnail(user_id) if thumb else None
+
+        await bot.send_document(
+            chat_id=user_id,
+            document=output_file,
+            thumb=thumb_path if thumb_path else None,
+            caption=f"✅ Converted to {format_to.upper()}"
+        )
+    except Exception as e:
+        await query.message.reply_text(f"❌ Conversion failed: `{e}`")
+    finally:
+        try:
+            os.remove(file_path)
+            if output_file and os.path.exists(output_file):
+                os.remove(output_file)
+        except:
+            pass
+
+
+# 📄 Remove or Add Page Command
+@Client.on_message(filters.command(["addpage", "removepage"]))
+async def pdf_page_edit(bot, message):
+    cmd = message.command[0]
+    user_id = message.from_user.id
+
+    await message.reply_text("📥 Send the PDF file first:")
+    response = await bot.listen(user_id, filters.document)
+    pdf_path = await response.download()
+    reader = PdfReader(pdf_path)
+    writer = PdfWriter()
+
+    if cmd == "removepage":
+        await message.reply_text("❌ Send the page number you want to remove:")
+        page_msg = await bot.listen(user_id, filters.text)
+        remove_page = int(page_msg.text) - 1
 
         for i in range(len(reader.pages)):
-            if i != page_num:
+            if i != remove_page:
                 writer.add_page(reader.pages[i])
 
-        with open(output_file, "wb") as f:
-            writer.write(f)
+    elif cmd == "addpage":
+        await message.reply_text("📄 Send another PDF to insert:")
+        page_pdf = await bot.listen(user_id, filters.document)
+        add_path = await page_pdf.download()
+        add_reader = PdfReader(add_path)
 
-        await message.reply_document(output_file, caption=f"🗑️ Page {page_num + 1} removed.")
-    except Exception as e:
-        await message.reply(f"❌ Error: {e}")
-    finally:
-        os.remove(file)
-        if os.path.exists(output_file):
-            os.remove(output_file)
+        await message.reply_text("📍 Send page number to insert after:")
+        pos_msg = await bot.listen(user_id, filters.text)
+        position = int(pos_msg.text)
 
-# ─────────────────────────────────────────────
-# ➕ /add_page Command
-# ─────────────────────────────────────────────
-@Client.on_message(filters.command("add_page") & filters.reply)
-async def add_page(bot, message):
-    if len(message.command) < 2:
-        return await message.reply("Usage: `/add_page 2` (reply to the PDF where page will be added)")
+        for i in range(len(reader.pages)):
+            writer.add_page(reader.pages[i])
+            if i + 1 == position:
+                for p in add_reader.pages:
+                    writer.add_page(p)
 
-    try:
-        page_num = int(message.command[1]) - 1
-    except:
-        return await message.reply("⚠️ Invalid page number.")
+    output_path = "downloads/edited.pdf"
+    with open(output_path, "wb") as f:
+        writer.write(f)
 
-    replied = message.reply_to_message
-    if not replied or not replied.document:
-        return await message.reply("📄 Reply to a PDF file where you want to insert a page.")
+    thumb = await db.get_thumbnail(user_id)
+    thumb_path = get_thumbnail(user_id) if thumb else None
 
-    # Ask user to send page PDF
-    await message.reply("📥 Now send the PDF page you want to insert (single page).")
+    await bot.send_document(
+        chat_id=user_id,
+        document=output_path,
+        thumb=thumb_path if thumb_path else None,
+        caption="✅ Page operation complete."
+    )
 
-    @bot.on_message(filters.document & filters.user(message.from_user.id))
-    async def add_page_handler(bot, msg):
-        new_page_file = await msg.download()
-        main_file = await replied.download()
-        output_file = tempfile.mktemp(suffix=".pdf")
-
-        try:
-            reader_main = PdfReader(main_file)
-            reader_new = PdfReader(new_page_file)
-            writer = PdfWriter()
-
-            for i in range(len(reader_main.pages) + 1):
-                if i == page_num:
-                    writer.add_page(reader_new.pages[0])
-                if i < len(reader_main.pages):
-                    writer.add_page(reader_main.pages[i])
-
-            with open(output_file, "wb") as f:
-                writer.write(f)
-
-            await bot.send_document(message.chat.id, output_file, caption=f"📄 Added new page at {page_num + 1}.")
-        except Exception as e:
-            await bot.send_message(message.chat.id, f"❌ Error: {e}")
-        finally:
-            os.remove(main_file)
-            os.remove(new_page_file)
-            if os.path.exists(output_file):
-                os.remove(output_file)
+    os.remove(pdf_path)
+    if os.path.exists(output_path):
+        os.remove(output_path)
