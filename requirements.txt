@@ -11,3 +11,4 @@ ffmpeg
 pymongo==4.8.0
 tqdm
 PyPDF2
+pypandoc
