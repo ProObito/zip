@@ -32,12 +32,26 @@ async def addpass_cmd(bot, message):
     pdf_msg = message.reply_to_message
     pdf_path = await bot.download_media(pdf_msg)
 
-    await message.reply("🔐 Send the password you want to set (within 60 seconds):")
+    await message.reply(
+        "🔐 Send the password you want to set for this PDF.\n"
+        "⏳ You have 3 minutes.\n"
+        "❌ Type `cancel` anytime to stop."
+    )
+
     try:
-        pwd_msg = await bot.wait_for_message(filters=filters.user(user_id), timeout=60)
+        # Wait 180 seconds for reply
+        pwd_msg = await bot.wait_for_message(filters=filters.user(user_id), timeout=180)
         password = pwd_msg.text.strip()
+
+        # Cancel check
+        if password.lower() == "cancel":
+            await message.reply("🚫 Password setup cancelled.")
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+            return
+
     except Exception:
-        return await message.reply("❌ Timeout. No password received.")
+        return await message.reply("❌ Timeout. No password received in 3 minutes.")
 
     try:
         reader = PdfReader(pdf_path)
@@ -65,8 +79,6 @@ async def addpass_cmd(bot, message):
                 os.remove(f)
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
-
-
 # ================== REMOVE PASSWORD (UNPROTECT PDF) =====================
 @Client.on_message(filters.command("removepass"))
 async def removepass_cmd(bot, message):
