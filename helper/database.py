@@ -158,6 +158,20 @@ async def delete_thumbnail(user_id):
         os.remove(path)
 
 
+async def save_password(user_id, password):
+    await pass_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"password": password}},
+        upsert=True
+    )
+
+async def get_password(user_id):
+    data = await pass_col.find_one({"user_id": user_id})
+    return data["password"] if data else None
+
+async def delete_password(user_id):
+    await pass_col.delete_one({"user_id": user_id})
+
 # ==============================
 # ✅ Export Database instance
 # ==============================
