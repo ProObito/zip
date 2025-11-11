@@ -10,7 +10,8 @@ psutil
 ffmpeg
 pymongo==4.8.0
 tqdm
-PyPDF2
+PyPDF2==3.0.1
+PyMuPDF
 ebooklib
 reportlab==3.6.12
 zipfile36
