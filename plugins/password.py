@@ -9,7 +9,7 @@ from pyrogram.types import Message
 from PyPDF2 import PdfReader, PdfWriter
 
 # Import your status bar helper (adjust if signature differs)
-from helper.utils import status_bar  # expected: async def status_bar(bot, chat_id, text) or similar
+from .utils import status_bar  # expected: async def status_bar(bot, chat_id, text) or similar
 
 TMP = "downloads"
 os.makedirs(TMP, exist_ok=True)
