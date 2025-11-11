@@ -15,3 +15,5 @@ PyMuPDF
 ebooklib
 reportlab==3.6.12
 zipfile36
+pyzipper==0.3.7
+pdf2image
