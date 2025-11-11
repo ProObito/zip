@@ -2,6 +2,114 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 import os
 import subprocess
+import shutil
+import zipfile
+import tempfile
+import asyncio
+from typing import Optional
+from PyPDF2 import PdfReader, PdfWriter
+
+# Import your status bar helper (adjust if signature differs)
+from .utils import status_bar  # expected: async def status_bar(bot, chat_id, text) or similar
+# backward compatibility alias 
+
+TMP = "downloads"
+os.makedirs(TMP, exist_ok=True)
+
+# user_sessions holds interactive state per user
+user_sessions = {}
+# structure:
+# user_sessions[uid] = {
+#   "cmd": "getpage" / "addpage" / "replacepage" / "removepage" / "addpass" / "removepass",
+#   "stage": "...",      # e.g. "await_file", "await_number", "await_aux", "processing"
+#   "file": "/path/to/base",
+#   "aux": "/path/to/aux",
+#   "page_no": int,
+#   "password": str
+# }
+
+TIMEOUT = 180  # seconds (3 minutes)
+
+
+### ---------- Helpers ----------
+def cleanup(*paths):
+    for p in paths:
+        try:
+            if not p:
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            elif os.path.exists(p):
+                os.remove(p)
+        except:
+            pass
+
+
+async def wait_for_input(user_id: int, timeout: int = TIMEOUT) -> Optional[str]:
+    """
+    Wait until user_sessions[user_id] gets a 'text' field, or cancelled/timeout.
+    Returns the text or None (timeout/cancel).
+    """
+    for _ in range(timeout):
+        await asyncio.sleep(1)
+        sess = user_sessions.get(user_id)
+        if not sess:  # cancelled externally
+            return None
+        if "text" in sess:
+            txt = sess.pop("text")
+            return txt
+    # timeout
+    user_sessions.pop(user_id, None)
+    return None
+
+
+async def wait_for_aux_file(user_id: int, timeout: int = TIMEOUT) -> Optional[str]:
+    """
+    Wait until user_sessions[user_id] gets an 'aux' (path) or cancelled/timeout.
+    """
+    for _ in range(timeout):
+        await asyncio.sleep(1)
+        sess = user_sessions.get(user_id)
+        if not sess:
+            return None
+        if "aux" in sess:
+            return sess.pop("aux")
+    user_sessions.pop(user_id, None)
+    return None
+
+
+def ensure_ext(path: str, ext: str) -> str:
+    return path if path.lower().endswith(f".{ext}") else f"{path}.{ext}"
+
+
+### ---------- Generic flow functions ----------
+async def ask_send_file(bot: Client, chat_id:int, user_id:int, prompt:str):
+    """Ask user to send file (document). Sets session and returns downloaded path or None."""
+    user_sessions[user_id] = {"cmd": "await_file"}
+    await bot.send_message(chat_id, prompt + f"\n⏳ You have {TIMEOUT//60} minute(s). Type `cancel` to cancel.")
+    # Wait for session to get 'file' by doc listener
+    for _ in range(TIMEOUT):
+        await asyncio.sleep(1)
+        sess = user_sessions.get(user_id)
+        if not sess:
+            return None
+        if "file" in sess:
+            return sess.pop("file")
+    user_sessions.pop(user_id, None)
+    await bot.send_message(chat_id, "❌ Timeout. No file received.")
+    return None
+
+
+async def ask_text(bot: Client, chat_id:int, user_id:int, prompt:str):
+    """Ask a text (page number or password). Returns text or None."""
+    user_sessions[user_id] = {"cmd":"await_text"}
+    await bot.send_message(chat_id, prompt + f"\n⏳ You have {TIMEOUT//60} minute(s). Type `cancel` to cancel.")
+    txt = await wait_for_input(user_id)
+    if txt is None:
+        await bot.send_message(chat_id, "❌ Timeout or cancelled.")
+        return None
+    return txt
+    
 
 # === Ghostscript Compression Function ===
 def compress_pdf(input_path, output_path, quality="ebook"):
