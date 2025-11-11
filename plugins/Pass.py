@@ -383,9 +383,9 @@ async def cmd_replacepage(bot: Client, message: Message):
     src = await message.reply_to_message.download(file_name=os.path.join(TMP, f"{message.from_user.id}_{doc.file_name}"))
     ext = os.path.splitext(src)[1].lower().lstrip(".")
 
-    # ask user to send replacement (image for CBZ or PDF page for PDF)
+    # ask user to send replacement
     await message.reply("Now reply with the replacement file (single-page PDF for PDF, image or CBZ for CBZ). You have 3 minutes. Type `cancel` to abort.")
-    user_sessions[message.from_user.id] = {"cmd":"await_replacefile", "base": src, "ext": ext, "page_no": page_no}
+    user_sessions[message.from_user.id] = {"cmd": "await_replacefile", "base": src, "ext": ext, "page_no": page_no}
 
     try:
         for _ in range(180):
@@ -417,7 +417,6 @@ async def cmd_replacepage(bot: Client, message: Message):
             writer = PdfWriter()
             for i, p in enumerate(reader.pages, start=1):
                 if i == page_no:
-                    # insert pages from replacement (usually single page)
                     for rp in replace_reader.pages:
                         writer.add_page(rp)
                 else:
@@ -428,20 +427,43 @@ async def cmd_replacepage(bot: Client, message: Message):
             await message.reply_text("✅ Page replaced. Choose new name for final file.")
             await send_with_newname_and_thumb(bot, message.chat.id, message.from_user.id, outp, "pdf")
 
-        elif ext in ("cbz","zip"):
+        elif ext in ("cbz", "zip"):
             tmpd = tempfile.mkdtemp(prefix="cbz_")
             with zipfile.ZipFile(src, "r") as zf:
                 zf.extractall(tmpd)
-            images = sorted([f for f in os.listdir(tmpd) if f.lower().endswith((".jpg",".jpeg",".png"))])
+            images = sorted([f for f in os.listdir(tmpd) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
             if page_no < 1 or page_no > len(images):
                 cleanup_paths(src, aux, tmpd)
                 return await message.reply("Image index out of range.")
-            # replace target
-            target = os.path.join(tmpd, images[page_no-1])
-            # if aux is zip -> extract first image
-            if aux.lower().endswith((".zip",".cbz")):
+
+            target = os.path.join(tmpd, images[page_no - 1])
+
+            # determine replacement image
+            if aux.lower().endswith((".zip", ".cbz")):
                 with zipfile.ZipFile(aux, "r") as zf:
-                    for name in zf.namelist():
-                        if name.lower().endswith((".jpg",".jpeg",".png")):
-                            zf.extract(name, tmpd)
-                            src_replace 
+                    img_list = [n for n in zf.namelist() if n.lower().endswith((".jpg", ".jpeg", ".png"))]
+                    if not img_list:
+                        cleanup_paths(src, aux, tmpd)
+                        return await message.reply("No image found inside replacement archive.")
+                    zf.extract(img_list[0], tmpd)
+                    src_replace = os.path.join(tmpd, img_list[0])
+            else:
+                src_replace = aux
+
+            shutil.copyfile(src_replace, target)
+
+            outp = os.path.join(TMP, f"replaced_{os.path.basename(src)}")
+            with zipfile.ZipFile(outp, "w") as zf:
+                for fname in sorted(os.listdir(tmpd)):
+                    zf.write(os.path.join(tmpd, fname), arcname=fname)
+
+            await message.reply_text("✅ Image replaced. Choose new name for final file.")
+            await send_with_newname_and_thumb(bot, message.chat.id, message.from_user.id, outp, ext)
+            cleanup_paths(tmpd)
+        else:
+            await message.reply("Unsupported file type for replacepage (PDF/CBZ/ZIP supported).")
+
+    except Exception as e:
+        await message.reply(f"❌ Error during replace: {e}")
+    finally:
+        cleanup_paths(src, aux)
