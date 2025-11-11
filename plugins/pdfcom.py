@@ -637,3 +637,62 @@ async def cmd_addpass(bot: Client, message: Message):
         cleanup(src)
         await bot.send_message(chat, f"❌ Error during addpass: {e}")
 
+
+# 6) REMOVEPASS: remove password / strip password.txt from archives
+@Client.on_message(filters.command("removepass") & filters.private)
+async def cmd_removepass(bot: Client, message: Message):
+    uid = message.from_user.id
+    chat = message.chat.id
+
+    src = await ask_send_file(bot, chat, uid, "📎 Send the file (PDF / CBZ / ZIP / EPUB) to remove password from:")
+    if not src:
+        return
+
+    # For PDF, need the password to decrypt. For archives, just remove password.txt if exists.
+    txt = await ask_text(bot, chat, uid, "🔑 Send current password (or type `skip` if none):")
+    if txt is None:
+        cleanup(src); return await bot.send_message(chat, "❌ No password provided / cancelled.")
+    pwd = txt
+
+    await status_bar(bot, chat, "Removing password...")
+
+    ext = os.path.splitext(src)[1].lower().lstrip(".")
+    try:
+        if ext == "pdf":
+            reader = PdfReader(src)
+            if reader.is_encrypted:
+                try:
+                    reader.decrypt(pwd)
+                except Exception as e:
+                    cleanup(src)
+                    return await bot.send_message(chat, "❌ Wrong password or cannot decrypt PDF.")
+            writer = PdfWriter()
+            for p in reader.pages:
+                writer.add_page(p)
+            out = os.path.join(TMP, f"unpass_{uid}_{os.path.basename(src)}")
+            with open(out, "wb") as f:
+                writer.write(f)
+            await bot.send_document(chat, out)
+            cleanup(src, out)
+        elif ext in ("zip","cbz","epub"):
+            tmpd = tempfile.mkdtemp(prefix=f"zipdec_{uid}_")
+            with zipfile.ZipFile(src, "r") as zf:
+                zf.extractall(tmpd)
+            # remove password.txt if present
+            ptxt = os.path.join(tmpd, "password.txt")
+            if os.path.exists(ptxt):
+                os.remove(ptxt)
+            out = os.path.join(TMP, f"unpass_{uid}_{os.path.basename(src)}")
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root,_,files in os.walk(tmpd):
+                    for f in files:
+                        zf.write(os.path.join(root,f), arcname=os.path.relpath(os.path.join(root,f), tmpd))
+            await bot.send_document(chat, out)
+            cleanup(src, tmpd, out)
+        else:
+            cleanup(src)
+            return await bot.send_message(chat, "❌ Unsupported file type for removepass.")
+    except Exception as e:
+        cleanup(src)
+        await bot.send_message(chat, f"❌ Error during removepass: {e}")
+        
