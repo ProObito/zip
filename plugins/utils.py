@@ -2,7 +2,7 @@ import math
 import time
 from pyrogram.types import Message
 
-async def progress_bar(current, total, message: Message, start, process_name="Processing"):
+async def status_bar(current, total, message: Message, start, process_name="Processing"):
     """Show real-time progress bar for uploads/downloads."""
     now = time.time()
     diff = now - start
