@@ -12,3 +12,5 @@ pymongo==4.8.0
 tqdm
 PyPDF2
 ebooklib
+reportlab==3.6.12
+zipfile36
