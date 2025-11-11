@@ -1,181 +1,237 @@
 import os
-from pyrogram import Client, filters
+import io
+import zipfile
 from PyPDF2 import PdfReader, PdfWriter
-from zipfile import ZipFile
-from helper.database import db, get_thumbnail
-from reportlab.pdfgen import canvas
+from pyrogram import Client, filters
+from helper.database import db
 
-# Helper functions for PDF operations
-async def remove_page(pdf_path, page_num, output_path):
-    reader = PdfReader(pdf_path)
-    writer = PdfWriter()
-    for i in range(len(reader.pages)):
-        if i != page_num - 1:
-            writer.add_page(reader.pages[i])
-    with open(output_path, "wb") as f:
-        writer.write(f)
-    return output_path
+TEMP_DIR = "temp"
+if not os.path.exists(TEMP_DIR):
+    os.makedirs(TEMP_DIR)
 
 
-async def add_page(pdf_path, page_num, output_path):
-    reader = PdfReader(pdf_path)
-    writer = PdfWriter()
-    tmp_page = "temp_added_page.pdf"
-
-    c = canvas.Canvas(tmp_page)
-    c.drawString(250, 500, "New Added Page")
-    c.save()
-
-    add_reader = PdfReader(tmp_page)
-    for i in range(len(reader.pages)):
-        writer.add_page(reader.pages[i])
-        if i == page_num - 1:
-            writer.add_page(add_reader.pages[0])
-
-    with open(output_path, "wb") as f:
-        writer.write(f)
-    os.remove(tmp_page)
-    return output_path
+async def get_thumb(bot, user_id):
+    """Fetch thumbnail from DB or reuse"""
+    thumb = await db.get_thumbnail(user_id)
+    thumb_path = None
+    if thumb:
+        try:
+            thumb_path = await bot.download_media(thumb)
+        except Exception:
+            thumb_path = None
+    return thumb_path
 
 
-async def extract_all(pdf_path, output_folder):
-    os.makedirs(output_folder, exist_ok=True)
-    reader = PdfReader(pdf_path)
-    for i, page in enumerate(reader.pages):
+# ================== ADD PASSWORD (PROTECT PDF) =====================
+@Client.on_message(filters.command("addpass"))
+async def addpass_cmd(bot, message):
+    user_id = message.from_user.id
+    if not message.reply_to_message or not message.reply_to_message.document:
+        return await message.reply("📄 Reply to a PDF file to add a password.")
+
+    pdf_msg = message.reply_to_message
+    pdf_path = await bot.download_media(pdf_msg)
+
+    await message.reply("🔐 Send the password you want to set (within 60 seconds):")
+    try:
+        pwd_msg = await bot.wait_for_message(filters=filters.user(user_id), timeout=60)
+        password = pwd_msg.text.strip()
+    except Exception:
+        return await message.reply("❌ Timeout. No password received.")
+
+    try:
+        reader = PdfReader(pdf_path)
         writer = PdfWriter()
-        writer.add_page(page)
-        with open(f"{output_folder}/page_{i + 1}.pdf", "wb") as f:
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.encrypt(password)
+
+        out_path = os.path.join(TEMP_DIR, "protected.pdf")
+        with open(out_path, "wb") as f:
             writer.write(f)
-    return output_folder
+
+        thumb_path = await get_thumb(bot, user_id)
+
+        await message.reply_document(
+            out_path,
+            caption=f"✅ Password added successfully.\n🔑 Password: `{password}`",
+            thumb=thumb_path,
+        )
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+    finally:
+        for f in [pdf_path, out_path]:
+            if f and os.path.exists(f):
+                os.remove(f)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
-# 🧩 Commands
-
-@Client.on_message(filters.command("protect"))
-async def protect_cmd(bot, message):
-    if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("Reply to a file to add password 🔒")
-
+# ================== REMOVE PASSWORD (UNPROTECT PDF) =====================
+@Client.on_message(filters.command("removepass"))
+async def removepass_cmd(bot, message):
     user_id = message.from_user.id
-    file = await message.reply_to_message.download()
-    msg = await message.reply_text("🔐 Send the password to lock this file:")
-
-    pwd_msg = await bot.listen(user_id)
-    password = pwd_msg.text.strip()
-    await msg.edit("🔄 Encrypting file...")
-
-    out = f"downloads/protected_{message.reply_to_message.document.file_name}"
-    reader = PdfReader(file)
-    writer = PdfWriter()
-
-    for page in reader.pages:
-        writer.add_page(page)
-    writer.encrypt(password)
-
-    with open(out, "wb") as f:
-        writer.write(f)
-
-    thumb = await db.get_thumbnail(user_id)
-    await message.reply_document(out, caption="✅ Password set successfully.", thumb=thumb)
-    os.remove(file)
-    os.remove(out)
-
-
-@Client.on_message(filters.command("unprotect"))
-async def unprotect_cmd(bot, message):
     if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("Reply to a protected file 🔓")
+        return await message.reply("📄 Reply to a password-protected PDF to remove its password.")
 
-    user_id = message.from_user.id
-    file = await message.reply_to_message.download()
-    msg = await message.reply_text("🔑 Send the password to unlock file:")
+    pdf_msg = message.reply_to_message
+    pdf_path = await bot.download_media(pdf_msg)
 
-    pwd_msg = await bot.listen(user_id)
-    password = pwd_msg.text.strip()
-    await msg.edit("🔄 Decrypting file...")
+    await message.reply("🔓 Send the current password for this PDF:")
+    try:
+        pwd_msg = await bot.wait_for_message(filters=filters.user(user_id), timeout=60)
+        password = pwd_msg.text.strip()
+    except Exception:
+        return await message.reply("❌ Timeout. No password received.")
 
-    out = f"downloads/unlocked_{message.reply_to_message.document.file_name}"
-    reader = PdfReader(file)
-    if reader.is_encrypted:
-        reader.decrypt(password)
+    try:
+        reader = PdfReader(pdf_path)
+        if reader.is_encrypted:
+            reader.decrypt(password)
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
 
-    writer = PdfWriter()
-    for page in reader.pages:
-        writer.add_page(page)
-    with open(out, "wb") as f:
-        writer.write(f)
+        out_path = os.path.join(TEMP_DIR, "unprotected.pdf")
+        with open(out_path, "wb") as f:
+            writer.write(f)
 
-    thumb = await db.get_thumbnail(user_id)
-    await message.reply_document(out, caption="✅ Password removed successfully.", thumb=thumb)
-    os.remove(file)
-    os.remove(out)
+        thumb_path = await get_thumb(bot, user_id)
+
+        await message.reply_document(
+            out_path,
+            caption="✅ Password removed successfully.",
+            thumb=thumb_path,
+        )
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+    finally:
+        for f in [pdf_path, out_path]:
+            if f and os.path.exists(f):
+                os.remove(f)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
+# ================== REMOVE PAGE =====================
 @Client.on_message(filters.command("removepage"))
 async def remove_page_cmd(bot, message):
     if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("Reply to a PDF and enter page number to remove 📄❌")
+        return await message.reply("📄 Reply to a PDF and use `/removepage <page_number>`")
 
-    user_id = message.from_user.id
-    file = await message.reply_to_message.download()
-    msg = await message.reply_text("📄 Send page number to remove:")
-    pg = await bot.listen(user_id)
-    page_num = int(pg.text.strip())
+    args = message.text.split()
+    if len(args) < 2 or not args[1].isdigit():
+        return await message.reply("⚠️ Usage: `/removepage 2`")
 
-    await msg.edit("🗑️ Removing page...")
-    out = f"downloads/removed_{message.reply_to_message.document.file_name}"
-    await remove_page(file, page_num, out)
+    page_to_remove = int(args[1]) - 1
+    pdf_path = await bot.download_media(message.reply_to_message)
 
-    thumb = await db.get_thumbnail(user_id)
-    await message.reply_document(out, caption=f"✅ Page {page_num} removed successfully.", thumb=thumb)
-    os.remove(file)
-    os.remove(out)
+    try:
+        reader = PdfReader(pdf_path)
+        writer = PdfWriter()
+
+        for i, page in enumerate(reader.pages):
+            if i != page_to_remove:
+                writer.add_page(page)
+
+        out_path = os.path.join(TEMP_DIR, "page_removed.pdf")
+        with open(out_path, "wb") as f:
+            writer.write(f)
+
+        thumb_path = await get_thumb(bot, message.from_user.id)
+
+        await message.reply_document(
+            out_path, caption=f"🗑 Removed page {args[1]}", thumb=thumb_path
+        )
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+    finally:
+        for f in [pdf_path, out_path]:
+            if f and os.path.exists(f):
+                os.remove(f)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
+# ================== ADD PAGE =====================
 @Client.on_message(filters.command("addpage"))
 async def add_page_cmd(bot, message):
-    if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("Reply to a PDF and enter page number to add 📄➕")
-
     user_id = message.from_user.id
-    file = await message.reply_to_message.download()
-    msg = await message.reply_text("📄 Send page number after which to add new page:")
-    pg = await bot.listen(user_id)
-    page_num = int(pg.text.strip())
+    if not message.reply_to_message or not message.reply_to_message.document:
+        return await message.reply("📄 Reply to a PDF file where you want to add a page.")
 
-    await msg.edit("➕ Adding new page...")
-    out = f"downloads/added_{message.reply_to_message.document.file_name}"
-    await add_page(file, page_num, out)
+    await message.reply("📎 Send the page (PDF) you want to add:")
+    try:
+        page_msg = await bot.wait_for_message(filters=filters.user(user_id) & filters.document, timeout=60)
+        new_page_path = await bot.download_media(page_msg)
+    except Exception:
+        return await message.reply("❌ Timeout or invalid file.")
 
-    thumb = await db.get_thumbnail(user_id)
-    await message.reply_document(out, caption=f"✅ Page added after {page_num}.", thumb=thumb)
-    os.remove(file)
-    os.remove(out)
+    await message.reply("📄 Send the page number where you want to insert it:")
+    try:
+        num_msg = await bot.wait_for_message(filters=filters.user(user_id), timeout=60)
+        page_number = int(num_msg.text.strip()) - 1
+    except Exception:
+        return await message.reply("❌ Invalid page number.")
+
+    original_pdf = await bot.download_media(message.reply_to_message)
+    try:
+        reader = PdfReader(original_pdf)
+        writer = PdfWriter()
+        new_page_reader = PdfReader(new_page_path)
+
+        for i in range(len(reader.pages)):
+            if i == page_number:
+                writer.add_page(new_page_reader.pages[0])
+            writer.add_page(reader.pages[i])
+
+        out_path = os.path.join(TEMP_DIR, "page_added.pdf")
+        with open(out_path, "wb") as f:
+            writer.write(f)
+
+        thumb_path = await get_thumb(bot, user_id)
+
+        await message.reply_document(out_path, caption=f"📘 Page added at {page_number + 1}", thumb=thumb_path)
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+    finally:
+        for f in [original_pdf, new_page_path, out_path]:
+            if f and os.path.exists(f):
+                os.remove(f)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
+# ================== EXTRACT ALL PAGES =====================
 @Client.on_message(filters.command("extractall"))
 async def extract_all_cmd(bot, message):
     if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("Reply to a PDF to extract all pages 📂")
+        return await message.reply("📄 Reply to a PDF to extract all pages as individual PDFs.")
 
-    user_id = message.from_user.id
-    file = await message.reply_to_message.download()
-    await message.reply_text("📦 Extracting all pages...")
+    pdf_path = await bot.download_media(message.reply_to_message)
+    reader = PdfReader(pdf_path)
+    zip_path = os.path.join(TEMP_DIR, "extracted_pages.zip")
 
-    folder = f"downloads/extracted_{user_id}"
-    await extract_all(file, folder)
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        for i, page in enumerate(reader.pages):
+            writer = PdfWriter()
+            writer.add_page(page)
+            page_file = os.path.join(TEMP_DIR, f"page_{i+1}.pdf")
+            with open(page_file, "wb") as f:
+                writer.write(f)
+            zipf.write(page_file, f"page_{i+1}.pdf")
+            os.remove(page_file)
 
-    zip_path = f"{folder}.zip"
-    with ZipFile(zip_path, "w") as zipf:
-        for root, _, files in os.walk(folder):
-            for f in files:
-                zipf.write(os.path.join(root, f), f)
+    thumb_path = await get_thumb(bot, message.from_user.id)
 
-    thumb = await db.get_thumbnail(user_id)
-    await message.reply_document(zip_path, caption="✅ All pages extracted successfully.", thumb=thumb)
+    await message.reply_document(
+        zip_path,
+        caption="✅ All pages extracted successfully.",
+        thumb=thumb_path,
+    )
 
-    os.remove(file)
-    os.remove(zip_path)
-    for f in os.listdir(folder):
-        os.remove(os.path.join(folder, f))
-    os.rmdir(folder)
+    for f in [pdf_path, zip_path]:
+        if f and os.path.exists(f):
+            os.remove(f)
+    if thumb_path and os.path.exists(thumb_path):
+        os.remove(thumb_path)
