@@ -16,3 +16,4 @@ ebooklib
 reportlab==3.6.12
 zipfile36
 pdf2image
+pikepdf
